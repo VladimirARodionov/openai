@@ -36,10 +36,13 @@ async def cmd_stop(message: Message):
 
 @router.message(Command('profile'))
 async def cmd_profile(message: Message):
-    try:
-        await message.answer(text=i18n.format_value("get_profile_text", {"username": message.from_user.username or 'Не указан', "id": str(message.from_user.id)}), reply_markup=main_kb(message.from_user.id))
-    except Exception as e:
-        logger.exception(str(e))
+    await message.answer(text=i18n.format_value("get_profile_text", {"username": message.from_user.username or 'Не указан', "id": str(message.from_user.id)}), reply_markup=main_kb(message.from_user.id))
+
+
+@router.message(F.text.contains(i18n.format_value("back_menu_text")))
+async def cmd_back(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer(i18n.format_value("back_text"), reply_markup=main_kb(message.from_user.id))
 
 
 @router.message(F.text.endswith(i18n.format_value("show_users_text")), IsSuperUser())
@@ -86,13 +89,6 @@ async def process_delete_user(message: Message, state: FSMContext):
     else:
         await state.clear()
         await message.answer(i18n.format_value("not_success_delete_user_text"), reply_markup=main_kb(message.from_user.id))
-
-
-@router.message(F.text.contains(i18n.format_value("back_menu_text")), IsSuperUser())
-async def cmd_back(message: Message, state: FSMContext):
-    await state.clear()
-    await message.answer(i18n.format_value("back_text"), reply_markup=main_kb(message.from_user.id))
-
 
 
 client = OpenAI(

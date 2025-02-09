@@ -89,7 +89,7 @@ def list_users() -> str:
             return i18n.format_value("show_users_text_empty")
         res = ''
         for user in users:
-            res += f"{user.id} [{user.name}] \n\n"
+            res += f"<code><b>{user.id}</b></code> [{user.name}] \n"
             print(res)
         return res
     except Exception:

@@ -10,7 +10,6 @@ def main_kb(user_telegram_id: int):
         kb_list.append([KeyboardButton(text=i18n.format_value("add_user_menu")),
                         KeyboardButton(text=i18n.format_value("show_users_menu")),
                         KeyboardButton(text=i18n.format_value("delete_user_menu"))])
-    if kb_list:
         return ReplyKeyboardMarkup(
             keyboard=kb_list,
             resize_keyboard=True,
