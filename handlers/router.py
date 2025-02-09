@@ -36,7 +36,7 @@ def ask_gpt(prompt):
             model="gpt-3.5-turbo",
         )
 
-        return response["choices"][0]["message"]["content"]
+        return response.choices[0].message.content
     except Exception as e:
         logger.exception(str(e))
         return "OpenAI вернул ошибку: " + str(e)
