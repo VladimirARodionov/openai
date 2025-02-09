@@ -32,3 +32,6 @@ class User(Base):
 
     def __repr__(self) -> str:
         return f"User(id={self.id!r}"
+
+    def __str__(self) -> str:
+        return f"{self.id!r} [{self.name!r}]"
