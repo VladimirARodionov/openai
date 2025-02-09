@@ -23,6 +23,7 @@ async def cmd_stop(message: Message):
 client = OpenAI(
     api_key=env_config.get('OPEN_AI_TOKEN'),  # This is the default and can be omitted
 )
+model=env_config.get('MODEL')
 
 def ask_gpt(prompt):
     try:
@@ -33,7 +34,7 @@ def ask_gpt(prompt):
                     "content": prompt,
                 }
             ],
-            model="gpt-3.5-turbo",
+            model=model,
         )
 
         return response.choices[0].message.content
