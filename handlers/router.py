@@ -6,6 +6,7 @@ from aiogram.types import Message
 from openai import OpenAI
 
 from create_bot import env_config
+from filters.filter import IsSuperUser
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -42,7 +43,7 @@ def ask_gpt(prompt):
         logger.exception(str(e))
         return "OpenAI вернул ошибку: " + str(e)
 
-@router.message(F.text)
+@router.message(F.text, IsSuperUser())
 async def chat_with_gpt(message):
     response = ask_gpt(message.text)
     await message.answer(response)

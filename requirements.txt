@@ -2,3 +2,5 @@ aiogram
 aiohttp
 python-decouple==3.8
 openai
+SQLAlchemy==2.0.35
+alembic==1.14.0

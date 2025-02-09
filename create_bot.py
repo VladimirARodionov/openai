@@ -1,5 +1,6 @@
 import logging
 import pathlib
+from sqlalchemy import create_engine
 
 import decouple
 from logging import config as logging_config
@@ -31,3 +32,12 @@ def get_logger(name) -> logging.Logger:
     logging.basicConfig(level=LOGGER_LEVEL)
 
     return logging.getLogger(name)
+
+db_string = 'sqlite:///local.db'
+db = create_engine(
+    db_string,
+    **(
+        dict(pool_recycle=900, pool_size=100, max_overflow=3)
+    )
+)
+superusers = [int(superuser_id) for superuser_id in env_config.get('SUPERUSERS').split(',')]
