@@ -90,7 +90,6 @@ def list_users() -> str:
         res = ''
         for user in users:
             res += f"<code><b>{user.id}</b></code> [{user.name}] \n"
-            print(res)
         return res
     except Exception:
         logger.exception('Ошибка при выводе списка пользователей')
