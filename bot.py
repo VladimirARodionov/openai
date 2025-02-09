@@ -1,18 +1,19 @@
 import asyncio
+import logging
 
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
-from logging import config as logging_config
+from locale_config import i18n
 
 from aiogram.types import BotCommand, BotCommandScopeDefault
 
-from create_bot import get_logger, env_config
+from create_bot import env_config
 from handlers.router import router
 
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 bot = Bot(token=env_config.get('TOKEN'), default=DefaultBotProperties(parse_mode=ParseMode.HTML))
@@ -20,8 +21,9 @@ dp = Dispatcher()
 
 # Функция, которая настроит командное меню (дефолтное для всех пользователей)
 async def set_commands():
-    commands = [BotCommand(command='start', description='Старт'),
-                BotCommand(command='stop', description='Стоп')]
+    commands = [BotCommand(command='start', description=i18n.format_value("start_menu")),
+                BotCommand(command='profile', description=i18n.format_value("my_profile_text")),
+                BotCommand(command='stop', description=i18n.format_value("stop_menu"))]
     await bot.set_my_commands(commands, BotCommandScopeDefault())
 
 
