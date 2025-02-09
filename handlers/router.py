@@ -33,7 +33,7 @@ def ask_gpt(prompt):
                     "content": prompt,
                 }
             ],
-            model="gpt-4",
+            model="gpt-4o",
         )
 
         return response["choices"][0]["message"]["content"]
