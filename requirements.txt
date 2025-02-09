@@ -1,4 +1,4 @@
 aiogram
 aiohttp
 python-decouple==3.8
-openai==1.61.1
+openai
