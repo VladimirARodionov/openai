@@ -87,9 +87,7 @@ def list_users() -> str:
         users = session.query(User).all()
         if not users:
             return i18n.format_value("show_users_text_empty")
-        res = ''
-        for user in users:
-            res += f"<code><b>{user.id}</b></code> [{user.name}] \n"
+        res = "\n".join([f"<code><b>{user.id}</b></code> [{user.name}]" for user in users])
         return res
     except Exception:
         logger.exception('Ошибка при выводе списка пользователей')
