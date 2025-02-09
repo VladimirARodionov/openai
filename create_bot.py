@@ -4,7 +4,6 @@ import pathlib
 from sqlalchemy import create_engine
 
 import decouple
-from logging import config as logging_config
 
 def get_env_config() -> decouple.Config:
     """
@@ -22,14 +21,10 @@ def get_env_config() -> decouple.Config:
 
 env_config = get_env_config()
 
-def get_logger(name) -> logging.Logger:
-    logging_config.fileConfig("file_config_local.ini")
-    logger_level = env_config.get('LOGGER_LEVEL')
-    logging.basicConfig(level=logger_level)
-
-    return logging.getLogger(name)
 logging.config.fileConfig(fname=pathlib.Path(__file__).resolve().parent / 'logging.ini',
                           disable_existing_loggers=False)
+logging.getLogger('aiogram.dispatcher').propagate = False
+logging.getLogger('aiogram.event').propagate = False
 db_string = 'sqlite:///local.db'
 db = create_engine(
     db_string,
