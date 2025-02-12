@@ -12,6 +12,7 @@ from filters.filter import IsAllowed, IsSuperUser
 from keyboards.kbs import back_kb, main_kb
 from locale_config import i18n
 from services.common import add_user, delete_user, list_users
+from services.embedding import EmbeddingsSearch
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -96,6 +97,8 @@ client = OpenAI(
 )
 model=env_config.get('MODEL')
 
+searcher = EmbeddingsSearch(env_config.get('OPEN_AI_TOKEN'), model)
+
 def ask_gpt(prompt):
     try:
         response = client.chat.completions.create(
@@ -113,7 +116,23 @@ def ask_gpt(prompt):
         logger.exception(str(e))
         return "OpenAI вернул ошибку: " + str(e)
 
+
+@router.message(Command('load'), IsSuperUser())
+async def load_data(message: Message):
+    texts = [
+        "Это первый документ о кошках. Кошки - домашние животные.",
+        "Это второй документ о собаках. Собаки - верные друзья человека.",
+        # ... добавьте больше текстов
+    ]
+    # Создание эмбеддингов
+    searcher.prepare_text_data(texts)
+    # Сохранение эмбеддингов
+    searcher.save_embeddings("embeddings.csv")
+
+
 @router.message(F.text, IsAllowed())
 async def chat_with_gpt(message):
-    response = ask_gpt(message.text)
+    #response = ask_gpt(message.text)
+    searcher.load_embeddings("embeddings.csv")
+    response = searcher.ask(message.text)
     await message.answer(response, reply_markup=main_kb(message.from_user.id))
