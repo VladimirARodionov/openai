@@ -46,6 +46,6 @@ def embed_func(text: str) -> list[float]:
     ).data[0].embedding
 
 sqlite_db = SqliteDatabase(db_string, fts_tokenizers={"jieba": JiebaTokenize()}, echo=False)
-vs = SqliteVectorStore(sqlite_db, dim=1536, embedding_func=embed_func, fts_tokenize="jieba")
+vs = SqliteVectorStore(sqlite_db, embedding_func=embed_func, fts_tokenize="jieba")
 
 superusers = [int(superuser_id) for superuser_id in env_config.get('SUPERUSERS').split(',')]
