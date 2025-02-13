@@ -8,4 +8,6 @@ fluent.runtime==0.4.0
 pandas
 tiktoken
 scipy
+python-docx
+PyPDF2
 
