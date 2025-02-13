@@ -148,7 +148,8 @@ class EmbeddingsSearch:
                 return "Не найдено релевантных документов для ответа на вопрос."
             
             # Формируем контекст из найденных документов
-            context = "\n\n".join([r.text for r in results])
+            # Получаем тексты из документов, а не напрямую из результатов
+            context = "\n\n".join([doc.content for doc in results])
             
             message = (
                 "Используй приведенные ниже тексты для ответа на вопрос. "
