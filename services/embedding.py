@@ -149,7 +149,7 @@ class EmbeddingsSearch:
             logger.info(results)
             # Формируем контекст из найденных документов
             # Получаем тексты из документов, а не напрямую из результатов
-            context = "\n\n".join([doc['text'] for doc in results])
+            context = "\n\n".join([doc['content'] for doc in results])
             
             message = (
                 "Используй приведенные ниже тексты для ответа на вопрос. "
