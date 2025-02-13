@@ -216,7 +216,7 @@ class EmbeddingsSearch:
             # Удаляем все источники (это также удалит связанные документы)
             sources = self.vs.search_sources()
             for source in sources:
-                self.vs.delete_source(source.id)
+                self.vs.delete_source(source['id'])
             logger.info("База данных очищена")
         except Exception as e:
             logger.exception(f"Ошибка при очистке базы данных: {str(e)}")
