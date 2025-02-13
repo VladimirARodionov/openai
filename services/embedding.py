@@ -151,15 +151,15 @@ class EmbeddingsSearch:
             # Получаем тексты из документов, а не напрямую из результатов
             context = "\n\n".join([doc['content'] for doc in results])
             
-            message = (
-                "Используй приведенные ниже тексты для ответа на вопрос. "
-                "Если ответ не найден в текстах, напиши 'Не могу найти ответ.'\n\n"
-                f"Тексты:\n{context}\n\n"
-                f"Вопрос: {query}"
-            )
+            message = f"""
+                Используй приведенные ниже тексты для ответа на вопрос. 
+                Если ответ не найден в текстах, напиши 'Не могу найти ответ.'\n\n
+                Тексты: "{context}"\n\n
+                Вопрос: {query}
+            """
             
             if print_message:
-                print(message)
+                logger.info(message)
             
             messages = [
                 {"role": "system", "content": "Ты помощник, который отвечает на вопросы на основе предоставленных текстов."},
@@ -186,5 +186,5 @@ class EmbeddingsSearch:
                 self.vs.delete_source(source.id)
             logger.info("База данных очищена")
         except Exception as e:
-            logger.error(f"Ошибка при очистке базы данных: {str(e)}")
+            logger.exception(f"Ошибка при очистке базы данных: {str(e)}")
             raise
