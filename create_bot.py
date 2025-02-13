@@ -3,12 +3,39 @@ import logging.config
 import pathlib
 
 import openai
-from sqlalchemy import create_engine
-
+import sqlalchemy
+import typing as t
 import decouple
 from sqlalchemy_vectorstores import SqliteDatabase, SqliteVectorStore
+from sqlalchemy_vectorstores.databases import sa_types
 from sqlalchemy_vectorstores.tokenizers import JiebaTokenize
 
+class SqliteVector(sqlalchemy.TypeDecorator):
+    '''
+    a simple sqlalchemy column type representing embeddings in sqlite
+    '''
+    impl = sqlalchemy.LargeBinary
+    cache_ok = True
+
+    def __init__(self, *args: t.Any, dim: int = 1536, **kwargs: t.Any):
+        super().__init__(*args, **kwargs)
+        self._dim = dim
+
+    def process_bind_param(self, value: t.List[float | int] | None, dialect: sqlalchemy.Dialect) -> bytes:
+        from sqlite_vec import serialize_float32
+
+        if value is not None:
+            assert len(value) == self._dim, f"the embedding dimension({len(value)}) is not equal to ({self._dim}) in database."
+            return serialize_float32(value)
+
+    def process_result_value(self, value: bytes | None, dialect: sqlalchemy.Dialect) -> t.List[float]:
+        import struct
+
+        if value is not None:
+            return list(struct.unpack(f"{self._dim}f", value))
+
+
+sa_types.SqliteVector = SqliteVector
 
 def get_env_config() -> decouple.Config:
     """
@@ -31,7 +58,7 @@ logging.config.fileConfig(fname=pathlib.Path(__file__).resolve().parent / 'loggi
 logging.getLogger('aiogram.dispatcher').propagate = False
 logging.getLogger('aiogram.event').propagate = False
 db_string = 'sqlite:///local.db'
-db = create_engine(
+db = sqlalchemy.create_engine(
     db_string,
     **(
         dict(pool_recycle=900, pool_size=100, max_overflow=3)
