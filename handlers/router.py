@@ -144,5 +144,5 @@ async def clear_database(message: Message):
 @router.message(F.text, IsAllowed())
 async def chat_with_gpt(message):
     #response = ask_gpt(message.text)
-    response = searcher.ask(message.text)
+    response = searcher.ask(message.text, True)
     await message.answer(response, reply_markup=main_kb(message.from_user.id))
