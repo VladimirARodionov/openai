@@ -133,12 +133,14 @@ async def load_from_text(message: Message):
 
 @router.message(Command('load_from_dir'), IsSuperUser())
 async def load_from_dir(message: Message):
-    searcher.load_documents_from_directory('load')
+    response = searcher.load_documents_from_directory('load')
+    await message.answer(response, reply_markup=main_kb(message.from_user.id))
 
 
 @router.message(Command('clear_database'), IsSuperUser())
 async def clear_database(message: Message):
-    searcher.clear_database()
+    response = searcher.clear_database()
+    await message.answer(response, reply_markup=main_kb(message.from_user.id))
 
 
 @router.message(F.text, IsAllowed())

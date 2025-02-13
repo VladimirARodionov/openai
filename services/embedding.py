@@ -106,6 +106,7 @@ class EmbeddingsSearch:
         Args:
             directory_path (str): Путь к директории с документами
         """
+        file_count = 0
         for file_path in Path(directory_path).rglob('*'):
             if not file_path.is_file():
                 continue
@@ -166,10 +167,12 @@ class EmbeddingsSearch:
                                 content=paragraph,
                                 metadata={"paragraph_number": i}
                             )
-                        
+                file_count += 1
             except Exception as e:
-                logger.error(f"Ошибка при обработке файла {file_path}: {str(e)}")
+                logger.exception(f"Ошибка при обработке файла {file_path}: {str(e)}")
                 continue
+        return f"Загружено {file_count} файлов"
+
 
     def ask(self, query, print_message=False):
         """Ответ на вопрос с использованием GPT и релевантных текстов"""
@@ -218,6 +221,7 @@ class EmbeddingsSearch:
             for source in sources:
                 self.vs.delete_source(source['id'])
             logger.info("База данных очищена")
+            return "База данных очищена"
         except Exception as e:
             logger.exception(f"Ошибка при очистке базы данных: {str(e)}")
-            raise
+            return f"Ошибка при очистке базы данных: {str(e)}"
