@@ -84,6 +84,20 @@ class EmbeddingsSearch:
             message += next_article
         return message + question
 
+    def _split_text_into_paragraphs(self, text: str) -> list[str]:
+        """Разбивает текст на параграфы
+        
+        Args:
+            text (str): Исходный текст
+
+        Returns:
+            list[str]: Список параграфов
+        """
+        # Разбиваем по двойным переносам строк
+        paragraphs = [p.strip() for p in text.split('\n\n')]
+        
+        return paragraphs
+
     def load_documents_from_directory(self, directory_path):
         """Загрузка документов из директории и создание эмбеддингов
         
@@ -101,38 +115,57 @@ class EmbeddingsSearch:
                     with open(file_path, 'r', encoding='utf-8') as f:
                         text = f.read()
                         if text.strip():
-                            # Добавляем источник и документ
+                            # Добавляем источник
                             src_id = self.vs.add_source(
                                 url=str(file_path),
                                 tags=["txt"],
                                 metadata={"path": str(file_path)}
                             )
-                            self.vs.add_document(src_id=src_id, content=text)
+                            # Разбиваем на параграфы и сохраняем каждый отдельно
+                            paragraphs = self._split_text_into_paragraphs(text)
+                            for i, paragraph in enumerate(paragraphs):
+                                self.vs.add_document(
+                                    src_id=src_id, 
+                                    content=paragraph,
+                                    metadata={"paragraph_number": i}
+                                )
                         
                 elif file_path.suffix.lower() == '.pdf':
                     text = ""
                     with open(file_path, 'rb') as f:
                         pdf_reader = PyPDF2.PdfReader(f)
                         for page in pdf_reader.pages:
-                            text += page.extract_text() + "\n"
+                            text += page.extract_text() + "\n\n"
                     if text.strip():
                         src_id = self.vs.add_source(
                             url=str(file_path),
                             tags=["pdf"],
                             metadata={"path": str(file_path)}
                         )
-                        self.vs.add_document(src_id=src_id, content=text)
+                        paragraphs = self._split_text_into_paragraphs(text)
+                        for i, paragraph in enumerate(paragraphs):
+                            self.vs.add_document(
+                                src_id=src_id, 
+                                content=paragraph,
+                                metadata={"paragraph_number": i}
+                            )
                         
                 elif file_path.suffix.lower() in ['.doc', '.docx']:
                     doc = docx.Document(file_path)
-                    text = "\n".join([paragraph.text for paragraph in doc.paragraphs])
+                    text = "\n\n".join([paragraph.text for paragraph in doc.paragraphs])
                     if text.strip():
                         src_id = self.vs.add_source(
                             url=str(file_path),
                             tags=["docx"],
                             metadata={"path": str(file_path)}
                         )
-                        self.vs.add_document(src_id=src_id, content=text)
+                        paragraphs = self._split_text_into_paragraphs(text)
+                        for i, paragraph in enumerate(paragraphs):
+                            self.vs.add_document(
+                                src_id=src_id, 
+                                content=paragraph,
+                                metadata={"paragraph_number": i}
+                            )
                         
             except Exception as e:
                 logger.error(f"Ошибка при обработке файла {file_path}: {str(e)}")
