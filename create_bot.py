@@ -1,9 +1,14 @@
 import logging.config
 
 import pathlib
+
+import openai
 from sqlalchemy import create_engine
 
 import decouple
+from sqlalchemy_vectorstores import SqliteDatabase, SqliteVectorStore
+from sqlalchemy_vectorstores.tokenizers import JiebaTokenize
+
 
 def get_env_config() -> decouple.Config:
     """
@@ -32,4 +37,15 @@ db = create_engine(
         dict(pool_recycle=900, pool_size=100, max_overflow=3)
     )
 )
+client = openai.Client(api_key=env_config.get('OPEN_AI_TOKEN'))
+
+def embed_func(text: str) -> list[float]:
+    return client.embeddings.create(
+        input=text,
+        model=env_config.get('EMBEDDING_MODEL'),
+    ).data[0].embedding
+
+sqlite_db = SqliteDatabase(db_string, fts_tokenizers={"jieba": JiebaTokenize()}, echo=False)
+vs = SqliteVectorStore(sqlite_db, dim=1024, embedding_func=embed_func, fts_tokenize="jieba")
+
 superusers = [int(superuser_id) for superuser_id in env_config.get('SUPERUSERS').split(',')]

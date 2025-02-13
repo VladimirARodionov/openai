@@ -174,3 +174,5 @@ cython_debug/
 /.gigaide/
 logs.log.*
 local.db
+*.csv
+/load/*

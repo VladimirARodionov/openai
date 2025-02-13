@@ -1,22 +1,22 @@
 import ast
 import logging
 from pathlib import Path
-from openai import OpenAI
 import docx
 import PyPDF2
 import pandas as pd
 import tiktoken
 from scipy import spatial
+from create_bot import vs, client
 
 logger = logging.getLogger(__name__)
 
 class EmbeddingsSearch:
-    def __init__(self, api_key, model):
+    def __init__(self, embedding_model, model):
         """Инициализация с API ключом OpenAI"""
-        self.client = OpenAI(api_key=api_key)
-        self.EMBEDDING_MODEL = "text-embedding-3-small"
+        self.client = client
+        self.EMBEDDING_MODEL = embedding_model
         self.GPT_MODEL = model
-        self.df = None
+        self.vs = vs
 
     def prepare_text_data(self, texts, file_paths=None):
         """Подготовка данных и создание эмбеддингов"""
@@ -84,28 +84,6 @@ class EmbeddingsSearch:
             message += next_article
         return message + question
 
-    def ask(self, query, print_message=False):
-        """Ответ на вопрос с использованием GPT и релевантных текстов"""
-        message = self.query_message(query)
-        if print_message:
-            print(message)
-            
-        messages = [
-            {"role": "system", "content": "Ты помощник, который отвечает на вопросы на основе предоставленных текстов."},
-            {"role": "user", "content": message},
-        ]
-
-        try:
-            response = self.client.chat.completions.create(
-                model=self.GPT_MODEL,
-                messages=messages,
-                temperature=0
-            )
-            return response.choices[0].message.content
-        except Exception as e:
-            logger.exception(str(e))
-            return "OpenAI вернул ошибку: " + str(e)
-
     def load_documents_from_directory(self, directory_path):
         """Загрузка документов из директории и создание эмбеддингов
         
@@ -114,9 +92,6 @@ class EmbeddingsSearch:
         Args:
             directory_path (str): Путь к директории с документами
         """
-        texts = []
-        file_paths = []
-        
         for file_path in Path(directory_path).rglob('*'):
             if not file_path.is_file():
                 continue
@@ -124,8 +99,15 @@ class EmbeddingsSearch:
             try:
                 if file_path.suffix.lower() == '.txt':
                     with open(file_path, 'r', encoding='utf-8') as f:
-                        texts.append(f.read())
-                        file_paths.append(str(file_path))
+                        text = f.read()
+                        if text.strip():
+                            # Добавляем источник и документ
+                            src_id = self.vs.add_source(
+                                url=str(file_path),
+                                tags=["txt"],
+                                metadata={"path": str(file_path)}
+                            )
+                            self.vs.add_document(src_id=src_id, content=text)
                         
                 elif file_path.suffix.lower() == '.pdf':
                     text = ""
@@ -134,21 +116,74 @@ class EmbeddingsSearch:
                         for page in pdf_reader.pages:
                             text += page.extract_text() + "\n"
                     if text.strip():
-                        texts.append(text)
-                        file_paths.append(str(file_path))
+                        src_id = self.vs.add_source(
+                            url=str(file_path),
+                            tags=["pdf"],
+                            metadata={"path": str(file_path)}
+                        )
+                        self.vs.add_document(src_id=src_id, content=text)
                         
                 elif file_path.suffix.lower() in ['.doc', '.docx']:
                     doc = docx.Document(file_path)
                     text = "\n".join([paragraph.text for paragraph in doc.paragraphs])
                     if text.strip():
-                        texts.append(text)
-                        file_paths.append(str(file_path))
+                        src_id = self.vs.add_source(
+                            url=str(file_path),
+                            tags=["docx"],
+                            metadata={"path": str(file_path)}
+                        )
+                        self.vs.add_document(src_id=src_id, content=text)
                         
             except Exception as e:
                 logger.error(f"Ошибка при обработке файла {file_path}: {str(e)}")
                 continue
-        
-        if texts:
-            self.prepare_text_data(texts, file_paths)
-        else:
-            logger.warning(f"В директории {directory_path} не найдено поддерживаемых документов")
+
+    def ask(self, query, print_message=False):
+        """Ответ на вопрос с использованием GPT и релевантных текстов"""
+        try:
+            # Поиск похожих документов
+            results = self.vs.search_by_vector(query, top_k=5)
+            
+            if not results:
+                return "Не найдено релевантных документов для ответа на вопрос."
+            
+            # Формируем контекст из найденных документов
+            context = "\n\n".join([r.text for r in results])
+            
+            message = (
+                "Используй приведенные ниже тексты для ответа на вопрос. "
+                "Если ответ не найден в текстах, напиши 'Не могу найти ответ.'\n\n"
+                f"Тексты:\n{context}\n\n"
+                f"Вопрос: {query}"
+            )
+            
+            if print_message:
+                print(message)
+            
+            messages = [
+                {"role": "system", "content": "Ты помощник, который отвечает на вопросы на основе предоставленных текстов."},
+                {"role": "user", "content": message},
+            ]
+
+            response = self.client.chat.completions.create(
+                model=self.GPT_MODEL,
+                messages=messages,
+                temperature=0
+            )
+            return response.choices[0].message.content
+            
+        except Exception as e:
+            logger.exception(str(e))
+            return f"Произошла ошибка: {str(e)}"
+
+    def clear_database(self):
+        """Очистка базы данных"""
+        try:
+            # Удаляем все источники (это также удалит связанные документы)
+            sources = self.vs.search_sources()
+            for source in sources:
+                self.vs.delete_source(source.id)
+            logger.info("База данных очищена")
+        except Exception as e:
+            logger.error(f"Ошибка при очистке базы данных: {str(e)}")
+            raise

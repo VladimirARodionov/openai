@@ -97,7 +97,7 @@ client = OpenAI(
 )
 model=env_config.get('MODEL')
 
-searcher = EmbeddingsSearch(env_config.get('OPEN_AI_TOKEN'), model)
+searcher = EmbeddingsSearch(env_config.get('EMBEDDING_MODEL'), model)
 
 def ask_gpt(prompt):
     try:
@@ -117,8 +117,8 @@ def ask_gpt(prompt):
         return "OpenAI вернул ошибку: " + str(e)
 
 
-@router.message(Command('load'), IsSuperUser())
-async def load_data(message: Message):
+@router.message(Command('load_from_text'), IsSuperUser())
+async def load_from_text(message: Message):
     texts = [
         "Это первый документ о кошках. Кошки - домашние животные.",
         "Это второй документ о собаках. Собаки - верные друзья человека.",
@@ -128,11 +128,21 @@ async def load_data(message: Message):
     searcher.prepare_text_data(texts)
     # Сохранение эмбеддингов
     searcher.save_embeddings("embeddings.csv")
+    searcher.load_embeddings("embeddings.csv")
+
+
+@router.message(Command('load_from_dir'), IsSuperUser())
+async def load_from_dir(message: Message):
+    searcher.load_documents_from_directory('load')
+
+
+@router.message(Command('clear_database'), IsSuperUser())
+async def clear_database(message: Message):
+    searcher.clear_database()
 
 
 @router.message(F.text, IsAllowed())
 async def chat_with_gpt(message):
     #response = ask_gpt(message.text)
-    searcher.load_embeddings("embeddings.csv")
     response = searcher.ask(message.text)
     await message.answer(response, reply_markup=main_kb(message.from_user.id))
