@@ -6,7 +6,6 @@ import openai
 import sqlalchemy
 import typing as t
 import decouple
-from sqlalchemy_vectorstores import SqliteDatabase, SqliteVectorStore
 from sqlalchemy_vectorstores.databases import sa_types
 from sqlalchemy_vectorstores.tokenizers import JiebaTokenize
 
@@ -36,6 +35,8 @@ class SqliteVector(sqlalchemy.TypeDecorator):
 
 
 sa_types.SqliteVector = SqliteVector
+
+from sqlalchemy_vectorstores import SqliteDatabase, SqliteVectorStore
 
 def get_env_config() -> decouple.Config:
     """
