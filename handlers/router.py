@@ -5,7 +5,6 @@ from aiogram.filters import CommandStart, Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.types import Message
-from openai import OpenAI
 
 from create_bot import env_config
 from filters.filter import IsAllowed, IsSuperUser
@@ -92,44 +91,12 @@ async def process_delete_user(message: Message, state: FSMContext):
         await message.answer(i18n.format_value("not_success_delete_user_text"), reply_markup=main_kb(message.from_user.id))
 
 
-client = OpenAI(
-    api_key=env_config.get('OPEN_AI_TOKEN'),  # This is the default and can be omitted
-)
 model=env_config.get('MODEL')
 
-searcher = EmbeddingsSearch(env_config.get('EMBEDDING_MODEL'), model)
-
-def ask_gpt(prompt):
-    try:
-        response = client.chat.completions.create(
-            messages=[
-                {
-                    "role": "user",
-                    "content": prompt,
-                }
-            ],
-            model=model,
-        )
-
-        return response.choices[0].message.content
-    except Exception as e:
-        logger.exception(str(e))
-        return "OpenAI вернул ошибку: " + str(e)
-
-
-@router.message(Command('load_from_text'), IsSuperUser())
-async def load_from_text(message: Message):
-    texts = [
-        "Это первый документ о кошках. Кошки - домашние животные.",
-        "Это второй документ о собаках. Собаки - верные друзья человека.",
-        # ... добавьте больше текстов
-    ]
-    # Создание эмбеддингов
-    searcher.prepare_text_data(texts)
-    # Сохранение эмбеддингов
-    searcher.save_embeddings("embeddings.csv")
-    searcher.load_embeddings("embeddings.csv")
-
+searcher = EmbeddingsSearch(env_config.get('EMBEDDING_MODEL'),
+                            model,
+                            env_config.get('COUCHBASE_ADMINISTRATOR_USERNAME'),
+                            env_config.get('COUCHBASE_ADMINISTRATOR_PASSWORD'))
 
 @router.message(Command('load_from_dir'), IsSuperUser())
 async def load_from_dir(message: Message):

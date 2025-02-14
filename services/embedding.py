@@ -1,69 +1,49 @@
-import ast
 import logging
 from pathlib import Path
-import docx
-import PyPDF2
-import pandas as pd
 import tiktoken
-from scipy import spatial
-from create_bot import vs, client
+from llama_index.core import ServiceContext, StorageContext, SimpleDirectoryReader, VectorStoreIndex
+from llama_index.core.node_parser import SimpleNodeParser
+from llama_index.vector_stores.couchbase import CouchbaseVectorStore
+from couchbase.auth import PasswordAuthenticator
+from couchbase.cluster import Cluster
+from couchbase.options import ClusterOptions
 
 logger = logging.getLogger(__name__)
 
 class EmbeddingsSearch:
-    def __init__(self, embedding_model, model):
-        """Инициализация с API ключом OpenAI"""
-        self.client = client
+    def __init__(self, embedding_model, model, user, password):
+        """Инициализация с API ключом OpenAI и подключением к Couchbase"""
         self.EMBEDDING_MODEL = embedding_model
         self.GPT_MODEL = model
-        self.vs = vs
-
-    def prepare_text_data(self, texts, file_paths=None):
-        """Подготовка данных и создание эмбеддингов"""
-        if file_paths is None:
-            file_paths = [f"text_{i}" for i in range(len(texts))]
-            
-        embeddings = []
-        try:
-            for text in texts:
-                response = self.client.embeddings.create(
-                    model=self.EMBEDDING_MODEL,
-                    input=text
-                )
-                embeddings.append(response.data[0].embedding)
-        except Exception as e:
-            logger.exception(str(e))
-
-        self.df = pd.DataFrame({
-            'text': texts,
-            'embedding': embeddings,
-            'file_path': file_paths
-        })
         
-    def load_embeddings(self, path):
-        """Загрузка предварительно сохраненных эмбеддингов"""
-        self.df = pd.read_csv(path)
-        self.df['embedding'] = self.df['embedding'].apply(ast.literal_eval)
-
-    def save_embeddings(self, path):
-        """Сохранение эмбеддингов в CSV"""
-        self.df.to_csv(path, index=False)
-
-    def strings_ranked_by_relatedness(self, query, top_n=5):
-        """Поиск наиболее релевантных текстов"""
-        query_embedding_response = self.client.embeddings.create(
-            model=self.EMBEDDING_MODEL,
-            input=query,
+        # Инициализация Couchbase
+        auth = PasswordAuthenticator(
+            user,
+            password
         )
-        query_embedding = query_embedding_response.data[0].embedding
+        cluster = Cluster(
+            "couchbase://localhost",
+            ClusterOptions(auth)
+        )
+
+        # Создаем векторное хранилище
+        self.vector_store = CouchbaseVectorStore(
+            cluster=cluster,
+            bucket_name="vector_store",
+            scope_name="_default",
+            collection_name="_default",
+            index_name="vector_index"
+        )
         
-        strings_and_relatednesses = [
-            (row["text"], 1 - spatial.distance.cosine(query_embedding, row["embedding"]))
-            for i, row in self.df.iterrows()
-        ]
-        strings_and_relatednesses.sort(key=lambda x: x[1], reverse=True)
-        strings, relatednesses = zip(*strings_and_relatednesses)
-        return strings[:top_n], relatednesses[:top_n]
+        # Инициализация llama-index
+        self.service_context = ServiceContext.from_defaults(
+            llm_model=model,
+            embed_model=embedding_model
+        )
+        self.storage_context = StorageContext.from_defaults(
+            vector_store=self.vector_store
+        )
+        self.node_parser = SimpleNodeParser.from_defaults()
 
     def num_tokens(self, text):
         """Подсчет токенов в тексте"""
@@ -99,115 +79,93 @@ class EmbeddingsSearch:
         return paragraphs
 
     def load_documents_from_directory(self, directory_path):
-        """Загрузка документов из директории и создание эмбеддингов
+        """Загрузка документов из директории, создание индекса и сохранение в Couchbase
         
-        Поддерживаемые форматы файлов: .txt, .pdf, .doc, .docx
+        Поддерживаемые форматы:
+        - Текстовые: .txt, .md, .json, .csv, .html, .xml, .pdf, .doc, .docx, .ppt, .pptx
+        - Аудио: .mp3, .mp4, .mpeg, .mpga, .m4a, .wav, .webm
+        - Изображения: .jpg, .jpeg, .png, .gif, .webp
+        - Код: .py, .js, .java, .cpp, .h, .c, .cs, .php, .rb, .swift, .go
         
         Args:
             directory_path (str): Путь к директории с документами
         """
-        file_count = 0
-        for file_path in Path(directory_path).rglob('*'):
-            if not file_path.is_file():
-                continue
+        try:
+            file_count = 0
+            # Используем SimpleDirectoryReader для загрузки всех поддерживаемых файлов
+            documents = SimpleDirectoryReader(
+                input_dir=directory_path,
+                recursive=True,
+                filename_as_id=True,
+                required_exts=[
+                    # Текстовые форматы
+                    ".txt", ".md", ".json", ".csv", ".html", ".xml",
+                    ".pdf", ".doc", ".docx", ".ppt", ".pptx",
+                    # Аудио форматы
+                    ".mp3", ".mp4", ".mpeg", ".mpga", ".m4a", ".wav", ".webm",
+                    # Форматы изображений
+                    ".jpg", ".jpeg", ".png", ".gif", ".webp",
+                    # Форматы кода
+                    ".py", ".js", ".java", ".cpp", ".h", ".c", ".cs", ".php", ".rb", ".swift", ".go"
+                ],
+                exclude_hidden=True
+            ).load_data()
+            
+            if documents:
+                # Разбиваем на узлы
+                nodes = self.node_parser.get_nodes_from_documents(documents)
                 
-            try:
-                if file_path.suffix.lower() == '.txt':
-                    with open(file_path, 'r', encoding='utf-8') as f:
-                        text = f.read()
-                        if text.strip():
-                            # Добавляем источник
-                            src_id = self.vs.add_source(
-                                url=str(file_path),
-                                tags=["txt"],
-                                metadata={"path": str(file_path)}
-                            )
-                            # Разбиваем на параграфы и сохраняем каждый отдельно
-                            paragraphs = self._split_text_into_paragraphs(text)
-                            for i, paragraph in enumerate(paragraphs):
-                                self.vs.add_document(
-                                    src_id=src_id, 
-                                    content=paragraph,
-                                    metadata={"paragraph_number": i}
-                                )
-                        
-                elif file_path.suffix.lower() == '.pdf':
-                    text = ""
-                    with open(file_path, 'rb') as f:
-                        pdf_reader = PyPDF2.PdfReader(f)
-                        for page in pdf_reader.pages:
-                            text += page.extract_text() + "\n\n"
-                    if text.strip():
-                        src_id = self.vs.add_source(
-                            url=str(file_path),
-                            tags=["pdf"],
-                            metadata={"path": str(file_path)}
-                        )
-                        paragraphs = self._split_text_into_paragraphs(text)
-                        for i, paragraph in enumerate(paragraphs):
-                            self.vs.add_document(
-                                src_id=src_id, 
-                                content=paragraph,
-                                metadata={"paragraph_number": i}
-                            )
-                        
-                elif file_path.suffix.lower() in ['.doc', '.docx']:
-                    doc = docx.Document(file_path)
-                    text = "\n\n".join([paragraph.text for paragraph in doc.paragraphs])
-                    if text.strip():
-                        src_id = self.vs.add_source(
-                            url=str(file_path),
-                            tags=["docx"],
-                            metadata={"path": str(file_path)}
-                        )
-                        paragraphs = self._split_text_into_paragraphs(text)
-                        for i, paragraph in enumerate(paragraphs):
-                            self.vs.add_document(
-                                src_id=src_id, 
-                                content=paragraph,
-                                metadata={"paragraph_number": i}
-                            )
-                file_count += 1
-            except Exception as e:
-                logger.exception(f"Ошибка при обработке файла {file_path}: {str(e)}")
-                continue
-        return f"Загружено {file_count} файлов"
-
+                # Добавляем метаданные к узлам
+                for node in nodes:
+                    file_path = node.metadata.get('file_path', '')
+                    if file_path:
+                        file_path = Path(file_path)
+                        node.metadata.update({
+                            "file_path": str(file_path),
+                            "file_type": file_path.suffix.lower().lstrip('.'),
+                            "file_name": file_path.name,
+                            "source": str(file_path)
+                        })
+                
+                # Создаем индекс и сохраняем в Couchbase
+                index = VectorStoreIndex(
+                    nodes,
+                    storage_context=self.storage_context,
+                    service_context=self.service_context,
+                    show_progress=True  # Показываем прогресс индексации
+                )
+                
+                file_count = len(documents)
+                logger.info(f"Обработано файлов: {file_count}")
+                
+                return f"Загружено {file_count} файлов"
+            else:
+                return "Не найдено поддерживаемых файлов в указанной директории"
+            
+        except Exception as e:
+            logger.exception(f"Ошибка при загрузке документов: {str(e)}")
+            return f"Произошла ошибка при загрузке документов: {str(e)}"
 
     def ask(self, query, print_message=False):
         """Ответ на вопрос с использованием GPT и релевантных текстов"""
         try:
-            # Поиск похожих документов
-            results = self.vs.search_by_vector(query, top_k=5)
+            # Создаем индекс для поиска
+            index = VectorStoreIndex.from_vector_store(
+                self.vector_store,
+                service_context=self.service_context
+            )
             
-            if not results:
-                return "Не найдено релевантных документов для ответа на вопрос."
-            logger.info(results)
-            # Формируем контекст из найденных документов
-            # Получаем тексты из документов, а не напрямую из результатов
-            context = "\n\n".join([doc['content'] for doc in results])
+            # Создаем движок для запросов
+            query_engine = index.as_query_engine()
             
-            message = f"""
-                Используй приведенные ниже тексты для ответа на вопрос. 
-                Если ответ не найден в текстах, напиши 'Не могу найти ответ.'\n\n
-                Тексты: "{context}"\n\n
-                Вопрос: {query}
-            """
+            # Получаем ответ
+            response = query_engine.query(query)
             
             if print_message:
-                logger.info(message)
+                logger.info(f"Query: {query}")
+                logger.info(f"Response: {response}")
             
-            messages = [
-                {"role": "system", "content": "Ты помощник, который отвечает на вопросы на основе предоставленных текстов."},
-                {"role": "user", "content": message},
-            ]
-
-            response = self.client.chat.completions.create(
-                model=self.GPT_MODEL,
-                messages=messages,
-                temperature=0
-            )
-            return response.choices[0].message.content
+            return str(response)
             
         except Exception as e:
             logger.exception(str(e))
@@ -216,10 +174,8 @@ class EmbeddingsSearch:
     def clear_database(self):
         """Очистка базы данных"""
         try:
-            # Удаляем все источники (это также удалит связанные документы)
-            sources = self.vs.search_sources()
-            for source in sources:
-                self.vs.delete_source(source['id'])
+            # Очищаем векторное хранилище
+            self.vector_store.delete_all()
             logger.info("База данных очищена")
             return "База данных очищена"
         except Exception as e:

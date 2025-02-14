@@ -176,3 +176,4 @@ logs.log.*
 local.db
 *.csv
 /load/*
+/backup/*
