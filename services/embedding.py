@@ -9,7 +9,6 @@ from couchbase.auth import PasswordAuthenticator
 from couchbase.cluster import Cluster
 from couchbase.options import ClusterOptions
 from llama_index.llms.openai import OpenAI
-from scipy import spatial
 
 from create_bot import env_config
 
