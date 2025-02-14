@@ -29,19 +29,19 @@ class EmbeddingsSearch:
         
         # Используем connection string с указанием всех необходимых портов
         connection_string = f"couchbase://{couchbase_host}"
-        cluster = Cluster.connect(
+        self.cluster = Cluster.connect(
             connection_string,
             ClusterOptions(PasswordAuthenticator(user, password))
         )
         
         try:
             # Проверяем доступные индексы
-            mgr = cluster.search_indexes()
+            mgr = self.cluster.search_indexes()
             indexes = mgr.get_all_indexes()
             logger.info(f"Available indexes: {[idx.name for idx in indexes]}")
             
             # Проверяем GSI индексы
-            result = cluster.query(
+            result = self.cluster.query(
                 "SELECT * FROM system:indexes;"
             )
             gsi_indexes = [row for row in result]
@@ -49,7 +49,7 @@ class EmbeddingsSearch:
             
             # Создаем векторное хранилище
             self.vector_store = CouchbaseVectorStore(
-                cluster=cluster,
+                cluster=self.cluster,
                 bucket_name="vector_store",
                 scope_name="_default",
                 collection_name="_default",
@@ -181,14 +181,9 @@ class EmbeddingsSearch:
     def clear_database(self):
         """Очистка базы данных"""
         try:
-            # Получаем доступ к коллекции
-            bucket = self.vector_store._cluster.bucket(self.vector_store._bucket_name)
-            scope = bucket.scope(self.vector_store._scope_name)
-            collection = scope.collection(self.vector_store._collection_name)
-            
             # Удаляем все документы
             query = f"DELETE FROM `{self.vector_store._bucket_name}`.`{self.vector_store._scope_name}`.`{self.vector_store._collection_name}`"
-            self.vector_store._cluster.query(query)
+            self.cluster.query(query)
             
             logger.info("База данных очищена")
             return "База данных очищена"
