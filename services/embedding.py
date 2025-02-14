@@ -20,15 +20,22 @@ class EmbeddingsSearch:
         self.EMBEDDING_MODEL = embedding_model
         self.GPT_MODEL = model
         
-        # Инициализация llama-index settings с повторными попытками
+        # Устанавливаем API ключ OpenAI
+        openai_api_key = env_config.get('OPEN_AI_TOKEN')
+        if not openai_api_key:
+            raise ValueError("OpenAI API key not found in environment variables")
+        
+        # Инициализация llama-index settings с API ключом
         Settings.llm = OpenAI(
             model=model,
+            api_key=openai_api_key,
             max_retries=2,
             timeout=30,
             request_timeout=30
         )
         Settings.embed_model = OpenAIEmbedding(
             model=embedding_model,
+            api_key=openai_api_key,
             max_retries=2,
             timeout=30,
             request_timeout=30
