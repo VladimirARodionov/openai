@@ -1,12 +1,15 @@
 import logging
 from pathlib import Path
 import tiktoken
-from llama_index.core import ServiceContext, StorageContext, SimpleDirectoryReader, VectorStoreIndex
+from llama_index.core import Settings, StorageContext, SimpleDirectoryReader, VectorStoreIndex
 from llama_index.core.node_parser import SimpleNodeParser
+from llama_index.embeddings.openai import OpenAIEmbedding
 from llama_index.vector_stores.couchbase import CouchbaseVectorStore
 from couchbase.auth import PasswordAuthenticator
 from couchbase.cluster import Cluster
 from couchbase.options import ClusterOptions
+from llama_index.llms.openai import OpenAI
+from scipy import spatial
 
 from create_bot import env_config
 
@@ -18,20 +21,12 @@ class EmbeddingsSearch:
         self.EMBEDDING_MODEL = embedding_model
         self.GPT_MODEL = model
         
-        # Инициализация Couchbase
-        auth = PasswordAuthenticator(
-            user,
-            password
-        )
-        
-        # Настройка подключения к кластеру
-        options = ClusterOptions(
-            auth
-        )
-        
+        # Инициализация llama-index settings
+        Settings.llm = OpenAI(model=model)
+        Settings.embed_model = OpenAIEmbedding(model=embedding_model)
+
         # Получаем параметры подключения из переменных окружения
         couchbase_host = env_config.get('COUCHBASE_HOST')
-        couchbase_port = env_config.get('COUCHBASE_PORT')
         
         # Используем connection string с указанием всех необходимых портов
         connection_string = f"couchbase://{couchbase_host}"
@@ -40,20 +35,34 @@ class EmbeddingsSearch:
             ClusterOptions(PasswordAuthenticator(user, password))
         )
         
-        # Создаем векторное хранилище
-        self.vector_store = CouchbaseVectorStore(
-            cluster=cluster,
-            bucket_name="vector_store",
-            scope_name="_default",
-            collection_name="_default",
-            index_name="#primary"
-        )
+        try:
+            # Проверяем доступные индексы
+            mgr = cluster.search_indexes()
+            indexes = mgr.get_all_indexes()
+            logger.info(f"Available indexes: {[idx.name for idx in indexes]}")
+            
+            # Проверяем GSI индексы
+            result = cluster.query(
+                "SELECT * FROM system:indexes;"
+            )
+            gsi_indexes = [row for row in result]
+            logger.info(f"Available GSI indexes in _default scope: {gsi_indexes}")
+            
+            # Создаем векторное хранилище
+            self.vector_store = CouchbaseVectorStore(
+                cluster=cluster,
+                bucket_name="vector_store",
+                scope_name="_default",
+                collection_name="_default",
+                index_name="vector-index"
+            )
+            logger.info("Vector store initialized successfully")
+            
+        except Exception as e:
+            logger.error(f"Error initializing vector store: {str(e)}")
+            raise
         
-        # Инициализация llama-index
-        self.service_context = ServiceContext.from_defaults(
-            llm_model=model,
-            embed_model=embedding_model
-        )
+        # Инициализация storage context
         self.storage_context = StorageContext.from_defaults(
             vector_store=self.vector_store
         )
@@ -63,20 +72,6 @@ class EmbeddingsSearch:
         """Подсчет токенов в тексте"""
         encoding = tiktoken.encoding_for_model(self.GPT_MODEL)
         return len(encoding.encode(text))
-
-    def query_message(self, query, token_budget=4000):
-        """Создание сообщения для GPT с релевантными текстами"""
-        strings, relatednesses = self.strings_ranked_by_relatedness(query)
-        introduction = 'Используй приведенные ниже тексты для ответа на вопрос. Если ответ не найден в текстах, напиши "Не могу найти ответ."'
-        question = f"\n\nВопрос: {query}"
-        message = introduction
-        
-        for string in strings:
-            next_article = f'\n\nТекст:\n"""\n{string}\n"""'
-            if self.num_tokens(message + next_article + question) > token_budget:
-                break
-            message += next_article
-        return message + question
 
     def _split_text_into_paragraphs(self, text: str) -> list[str]:
         """Разбивает текст на параграфы
@@ -146,7 +141,6 @@ class EmbeddingsSearch:
                 index = VectorStoreIndex(
                     nodes,
                     storage_context=self.storage_context,
-                    service_context=self.service_context,
                     show_progress=True  # Показываем прогресс индексации
                 )
                 
@@ -166,8 +160,7 @@ class EmbeddingsSearch:
         try:
             # Создаем индекс для поиска
             index = VectorStoreIndex.from_vector_store(
-                self.vector_store,
-                service_context=self.service_context
+                self.vector_store
             )
             
             # Создаем движок для запросов
