@@ -20,9 +20,19 @@ class EmbeddingsSearch:
         self.EMBEDDING_MODEL = embedding_model
         self.GPT_MODEL = model
         
-        # Инициализация llama-index settings
-        Settings.llm = OpenAI(model=model)
-        Settings.embed_model = OpenAIEmbedding(model=embedding_model)
+        # Инициализация llama-index settings с повторными попытками
+        Settings.llm = OpenAI(
+            model=model,
+            max_retries=2,
+            timeout=30,
+            request_timeout=30
+        )
+        Settings.embed_model = OpenAIEmbedding(
+            model=embedding_model,
+            max_retries=2,
+            timeout=30,
+            request_timeout=30
+        )
 
         # Получаем параметры подключения из переменных окружения
         couchbase_host = env_config.get('COUCHBASE_HOST')
