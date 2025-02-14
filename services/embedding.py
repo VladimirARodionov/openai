@@ -1,5 +1,7 @@
 import logging
 from pathlib import Path
+
+import openai
 import tiktoken
 from llama_index.core import Settings, StorageContext, SimpleDirectoryReader, VectorStoreIndex
 from llama_index.core.node_parser import SimpleNodeParser
@@ -182,8 +184,20 @@ class EmbeddingsSearch:
             # Создаем движок для запросов
             query_engine = index.as_query_engine()
             
+            # Настраиваем логирование запросов OpenAI
+            original_post = openai.OpenAI.post
+            def logging_post(self, *args, **kwargs):
+                logger.info(f"OpenAI request args: {args} {kwargs}")
+                response = original_post(self, *args, **kwargs)
+                logger.info(f"OpenAI response: {response}")
+                return response
+            openai.OpenAI.post = logging_post
+            
             # Получаем ответ
             response = query_engine.query(query)
+            
+            # Восстанавливаем оригинальный метод
+            openai.OpenAI.post = original_post
             
             if print_message:
                 logger.info(f"Query: {query}")
