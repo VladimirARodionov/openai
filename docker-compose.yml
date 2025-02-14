@@ -2,7 +2,7 @@ version: '3.8'
 services:
   couchbase:
     container_name: couchbase
-    image: couchbase/server:7.2.0
+    image: couchbase/server:7.2.6
     ports:
       - "8091-8096:8091-8096"
       - "11210:11210"

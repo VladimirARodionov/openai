@@ -8,6 +8,27 @@ if [ -f "$INIT_FLAG" ]; then
     exit 0
 fi
 
+# Функция проверки готовности сервиса
+wait_for_service() {
+    local service=$1
+    local max_attempts=30
+    local attempt=1
+    
+    echo "Waiting for $service service..."
+    while [ $attempt -le $max_attempts ]; do
+        # Проверяем наличие сервиса в массиве services
+        if curl -s http://localhost:8091/pools/default | grep -q "\"services\".*\"$service\""; then
+            echo "$service service is ready"
+            return 0
+        fi
+        echo "Waiting for $service service... ($attempt/$max_attempts)"
+        sleep 5
+        attempt=$((attempt + 1))
+    done
+    echo "$service service failed to start"
+    return 1
+}
+
 # Ждем запуска Couchbase
 while ! curl -s http://localhost:8091 > /dev/null; do
     echo "Waiting for Couchbase to start..."
@@ -26,8 +47,14 @@ echo "Initializing Couchbase..."
   --cluster-index-ramsize 512 \
   --cluster-fts-ramsize 512
 
-# Ждем инициализации кластера
-sleep 5
+# Ждем готовности всех сервисов
+#wait_for_service kv || exit 1    # data service называется kv в API
+#wait_for_service n1ql || exit 1  # query service называется n1ql в API
+#wait_for_service index || exit 1
+#wait_for_service fts || exit 1
+
+
+sleep 10
 
 # Создание bucket
 /opt/couchbase/bin/couchbase-cli bucket-create \
@@ -39,18 +66,15 @@ sleep 5
   --bucket-ramsize 512
 
 # Ждем создания bucket
-sleep 5
+sleep 10
 
 # Создание первичного индекса
 /opt/couchbase/bin/cbq -e localhost:8093 -u ${COUCHBASE_ADMINISTRATOR_USERNAME} -p ${COUCHBASE_ADMINISTRATOR_PASSWORD} \
   --script="CREATE PRIMARY INDEX ON \`vector_store\`;"
 
-# Создание векторного индекса
+# Создание индекса для embedding
 /opt/couchbase/bin/cbq -e localhost:8093 -u ${COUCHBASE_ADMINISTRATOR_USERNAME} -p ${COUCHBASE_ADMINISTRATOR_PASSWORD} \
-  --script="
-  CREATE SEARCH INDEX vector_index ON \`vector_store\`(embedding) 
-  USING FTS 
-  WITH {\"type\": \"vector\", \"dims\": 1536};"
+  --script="CREATE INDEX embedding_index ON \`vector_store\`(embedding) USING GSI;"
 
 # Создаем флаг инициализации
 mkdir -p "$(dirname "$INIT_FLAG")"

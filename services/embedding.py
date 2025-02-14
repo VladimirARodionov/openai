@@ -8,6 +8,8 @@ from couchbase.auth import PasswordAuthenticator
 from couchbase.cluster import Cluster
 from couchbase.options import ClusterOptions
 
+from create_bot import env_config
+
 logger = logging.getLogger(__name__)
 
 class EmbeddingsSearch:
@@ -21,18 +23,30 @@ class EmbeddingsSearch:
             user,
             password
         )
-        cluster = Cluster(
-            "couchbase://localhost",
-            ClusterOptions(auth)
+        
+        # Настройка подключения к кластеру
+        options = ClusterOptions(
+            auth
         )
-
+        
+        # Получаем параметры подключения из переменных окружения
+        couchbase_host = env_config.get('COUCHBASE_HOST')
+        couchbase_port = env_config.get('COUCHBASE_PORT')
+        
+        # Используем connection string с указанием всех необходимых портов
+        connection_string = f"couchbase://{couchbase_host}"
+        cluster = Cluster.connect(
+            connection_string,
+            ClusterOptions(PasswordAuthenticator(user, password))
+        )
+        
         # Создаем векторное хранилище
         self.vector_store = CouchbaseVectorStore(
             cluster=cluster,
             bucket_name="vector_store",
             scope_name="_default",
             collection_name="_default",
-            index_name="vector_index"
+            index_name="#primary"
         )
         
         # Инициализация llama-index
@@ -124,7 +138,8 @@ class EmbeddingsSearch:
                             "file_path": str(file_path),
                             "file_type": file_path.suffix.lower().lstrip('.'),
                             "file_name": file_path.name,
-                            "source": str(file_path)
+                            "source": str(file_path),
+                            "type": "vector"  # Добавляем тип для индекса
                         })
                 
                 # Создаем индекс и сохраняем в Couchbase
