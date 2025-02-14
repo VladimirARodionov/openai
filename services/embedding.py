@@ -142,8 +142,13 @@ class EmbeddingsSearch:
                 # Разбиваем на узлы
                 nodes = self.node_parser.get_nodes_from_documents(documents)
                 
-                # Добавляем метаданные к узлам
-                for node in nodes:
+                # Создаем эмбеддинги для всех узлов сразу
+                embeddings = Settings.embed_model.get_text_embedding_batch(
+                    [node.text for node in nodes]
+                )
+                
+                # Добавляем метаданные и эмбеддинги к узлам
+                for node, embedding in zip(nodes, embeddings):
                     file_path = node.metadata.get('file_path', '')
                     if file_path:
                         file_path = Path(file_path)
@@ -152,15 +157,12 @@ class EmbeddingsSearch:
                             "file_type": file_path.suffix.lower().lstrip('.'),
                             "file_name": file_path.name,
                             "source": str(file_path),
-                            "type": "vector"  # Добавляем тип для индекса
+                            "type": "vector",  # Добавляем тип для индекса
+                            "embedding": embedding  # Сохраняем эмбеддинг
                         })
                 
-                # Создаем индекс и сохраняем в Couchbase
-                index = VectorStoreIndex(
-                    nodes,
-                    storage_context=self.storage_context,
-                    show_progress=True  # Показываем прогресс индексации
-                )
+                # Сохраняем узлы в Couchbase
+                self.vector_store.add_nodes(nodes)  # Используем add_nodes вместо add
                 
                 file_count = len(documents)
                 logger.info(f"Обработано файлов: {file_count}")
@@ -181,8 +183,44 @@ class EmbeddingsSearch:
                 self.vector_store
             )
             
-            # Создаем движок для запросов
-            query_engine = index.as_query_engine()
+            # Создаем движок для запросов с кастомным поиском
+            from llama_index.core.query_engine import RetrieverQueryEngine
+            from llama_index.core.retrievers import VectorIndexRetriever
+            from llama_index.core.response_synthesizers import get_response_synthesizer
+            from llama_index.core.prompts import PromptTemplate
+            from llama_index.core.response_synthesizers import ResponseMode
+            
+            # Создаем эмбеддинг для запроса один раз
+            query_embedding = Settings.embed_model.get_text_embedding(query)
+            
+            # Создаем кастомный retriever
+            retriever = VectorIndexRetriever(
+                index=index,
+                similarity_top_k=2,
+                vector_store=self.vector_store,
+            )
+            retriever._get_query_embedding = lambda _: query_embedding
+            
+            # Создаем кастомный текст промпта
+            qa_template = PromptTemplate(
+                "Используй приведенные ниже тексты для ответа на вопрос.\n"
+                "Если ответ не найден в текстах, напиши 'Не могу найти ответ.'\n"
+                "Тексты: {context_str}\n"
+                "Вопрос: {query_str}\n"
+                "Ответ: "
+            )
+            
+            # Создаем response synthesizer с нашим промптом
+            response_synthesizer = get_response_synthesizer(
+                response_mode=ResponseMode.COMPACT,
+                text_qa_template=qa_template
+            )
+            
+            # Создаем query engine с нашими компонентами
+            query_engine = RetrieverQueryEngine(
+                retriever=retriever,
+                response_synthesizer=response_synthesizer,
+            )
             
             # Настраиваем логирование запросов OpenAI
             original_post = openai.OpenAI.post
