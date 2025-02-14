@@ -181,8 +181,15 @@ class EmbeddingsSearch:
     def clear_database(self):
         """Очистка базы данных"""
         try:
-            # Очищаем векторное хранилище
-            self.vector_store.delete_all()
+            # Получаем доступ к коллекции
+            bucket = self.vector_store._cluster.bucket(self.vector_store._bucket_name)
+            scope = bucket.scope(self.vector_store._scope_name)
+            collection = scope.collection(self.vector_store._collection_name)
+            
+            # Удаляем все документы
+            query = f"DELETE FROM `{self.vector_store._bucket_name}`.`{self.vector_store._scope_name}`.`{self.vector_store._collection_name}`"
+            self.vector_store._cluster.query(query)
+            
             logger.info("База данных очищена")
             return "База данных очищена"
         except Exception as e:
