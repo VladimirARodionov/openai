@@ -1,4 +1,5 @@
 import logging
+from datetime import timedelta
 from pathlib import Path
 
 import openai
@@ -11,7 +12,7 @@ from llama_index.embeddings.openai import OpenAIEmbedding
 from llama_index.vector_stores.couchbase import CouchbaseVectorStore
 from couchbase.auth import PasswordAuthenticator
 from couchbase.cluster import Cluster
-from couchbase.options import ClusterOptions
+from couchbase.options import ClusterOptions, ClusterTimeoutOptions
 from llama_index.llms.openai import OpenAI
 from llama_index.core.prompts import ChatPromptTemplate
 
@@ -92,12 +93,17 @@ class EmbeddingsSearch:
 
         # Получаем параметры подключения из переменных окружения
         couchbase_host = env_config.get('COUCHBASE_HOST')
-        
+
         # Используем connection string с указанием всех необходимых портов
         connection_string = f"couchbase://{couchbase_host}"
         self.cluster = Cluster.connect(
             connection_string,
-            ClusterOptions(PasswordAuthenticator(user, password))
+            ClusterOptions(PasswordAuthenticator(user, password),
+                           timeout_options=ClusterTimeoutOptions(
+                               kv_timeout=timedelta(seconds=120),
+                               query_timeout=timedelta(seconds=120),
+                               search_timeout=timedelta(seconds=120)
+                           ))
         )
         
         try:
