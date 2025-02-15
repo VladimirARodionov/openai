@@ -256,9 +256,20 @@ class EmbeddingsSearch:
             initial_count = next(result)['count']
             logger.info(f"Documents before deletion: {initial_count}")
             
-            # Удаляем все документы
-            delete_query = f"DELETE FROM `{self.vector_store._bucket_name}`.`{self.vector_store._scope_name}`.`{self.vector_store._collection_name}`"
-            self.cluster.query(delete_query)
+            # Получаем все ID документов
+            id_query = f"SELECT META().id FROM `{self.vector_store._bucket_name}`.`{self.vector_store._scope_name}`.`{self.vector_store._collection_name}`"
+            result = self.cluster.query(id_query).rows()
+            
+            # Удаляем документы по одному
+            deleted_count = 0
+            for row in result:
+                try:
+                    collection.remove(row['id'])
+                    deleted_count += 1
+                except Exception as e:
+                    logger.error(f"Error deleting document {row['id']}: {str(e)}")
+            
+            logger.info(f"Deleted {deleted_count} documents")
             
             # Проверяем, что документы удалены
             result = self.cluster.query(count_query).rows()
