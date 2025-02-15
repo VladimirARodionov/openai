@@ -292,7 +292,7 @@ class EmbeddingsSearch:
                 similarity_top_k=5,
                 citation_qa_template=CITATION_QA_TEMPLATE,
                 citation_refine_template=CITATION_REFINE_TEMPLATE,
-                response_mode=ResponseMode.TREE_SUMMARIZE
+                response_mode=ResponseMode.COMPACT_ACCUMULATE
             )
             
             # Получаем ответ
