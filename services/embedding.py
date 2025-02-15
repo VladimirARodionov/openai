@@ -224,9 +224,9 @@ class EmbeddingsSearch:
             
             # Создаем движок для запросов с нашим промптом
             query_engine = index.as_query_engine(
-                text_qa_template=CHAT_TEXT_QA_PROMPT,
-                streaming=False,
-                verbose=True
+                #text_qa_template=CHAT_TEXT_QA_PROMPT,
+                #streaming=False,
+                #verbose=True
             )
             
             # Получаем ответ
