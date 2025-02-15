@@ -1,17 +1,20 @@
 import logging
+from datetime import timedelta
 from pathlib import Path
 
 import openai
 import tiktoken
 from llama_cloud import MessageRole
-from llama_index.core import Settings, StorageContext, SimpleDirectoryReader, VectorStoreIndex
+from llama_index.core import Settings, StorageContext, SimpleDirectoryReader, VectorStoreIndex, PromptTemplate
 from llama_index.core.base.llms.types import ChatMessage
 from llama_index.core.node_parser import SimpleNodeParser
+from llama_index.core.query_engine import CitationQueryEngine
+from llama_index.core.response_synthesizers import ResponseMode
 from llama_index.embeddings.openai import OpenAIEmbedding
 from llama_index.vector_stores.couchbase import CouchbaseVectorStore
 from couchbase.auth import PasswordAuthenticator
 from couchbase.cluster import Cluster
-from couchbase.options import ClusterOptions
+from couchbase.options import ClusterOptions, ClusterTimeoutOptions
 from llama_index.llms.openai import OpenAI
 from llama_index.core.prompts import ChatPromptTemplate
 
@@ -63,6 +66,49 @@ TEXT_QA_PROMPT_TMPL_MSGS = [
 # Создаем шаблон чата
 CHAT_TEXT_QA_PROMPT = ChatPromptTemplate(message_templates=TEXT_QA_PROMPT_TMPL_MSGS)
 
+CITATION_QA_TEMPLATE = PromptTemplate(
+    "Этот GPT предназначен для анализа загруженных книг, и ответов основываясь исключительно на этих книгах. "
+    "Он ищет релевантную информацию в текстах и формулирует ответ строго цитатами "
+    "(цитаты нужно выделить '' и нужно после цитаты номер шлоки (шлока это нумерация в документе) и название документа откуда взята цитата, "
+    "без добавления собственных интерпретаций. Если необходимая информация отсутствует в загруженных данных GPT прямо сообщает, что данных нет. "
+    "Ответы должны сохранять естественность и динамику общения, но ограничиваться только найденными цитатами. "
+    "Цитаты нужно выделять кавычками цитат."
+    "После показа ответа нужно привести список вопросов которыми обычно интересуются на эту тему."
+    "Например:\n"
+    "Источник: Зов\n"
+    "1.002. Нью-Йорк. 1921 Январь 1. Жизни счастье найди в творчестве, и око обрати в пустыню.\n"
+    "Источник: Озарение\n"
+    "2.1.5.3. Думайте каждый день, как закончить Мое дело.\n"
+    "\n------\n"
+    "{context_str}"
+    "\n------\n"
+    "Query: {query_str}\n"
+    "Answer: "
+)
+
+CITATION_REFINE_TEMPLATE = PromptTemplate(
+    "Этот GPT предназначен для анализа загруженных книг, и ответов основываясь исключительно на этих книгах. "
+    "Он ищет релевантную информацию в текстах и формулирует ответ строго цитатами "
+    "(цитаты нужно выделить '' и нужно после цитаты номер шлоки (шлока это нумерация в документе) и название документа откуда взята цитата, "
+    "без добавления собственных интерпретаций. Если необходимая информация отсутствует в загруженных данных GPT прямо сообщает, что данных нет. "
+    "Ответы должны сохранять естественность и динамику общения, но ограничиваться только найденными цитатами. "
+    "Цитаты нужно выделять кавычками цитат."
+    "После показа ответа нужно привести список вопросов которыми обычно интересуются на эту тему."
+    "Например:\n"
+    "Источник: Зов\n"
+    "1.002. Нью-Йорк. 1921 Январь 1. Жизни счастье найди в творчестве, и око обрати в пустыню.\n"
+    "Источник: Озарение\n"
+    "2.1.5.3. Думайте каждый день, как закончить Мое дело.\n"
+    "If the provided sources are not helpful, you will repeat the existing answer."
+    "\nBegin refining!"
+    "\n------\n"
+    "{context_str}"
+    "\n------\n"
+    "Query: {query_str}\n"
+    "Answer: "
+)
+
+
 class EmbeddingsSearch:
     def __init__(self, embedding_model, model, user, password):
         """Инициализация с API ключом OpenAI и подключением к Couchbase"""
@@ -92,12 +138,17 @@ class EmbeddingsSearch:
 
         # Получаем параметры подключения из переменных окружения
         couchbase_host = env_config.get('COUCHBASE_HOST')
-        
+
         # Используем connection string с указанием всех необходимых портов
         connection_string = f"couchbase://{couchbase_host}"
         self.cluster = Cluster.connect(
             connection_string,
-            ClusterOptions(PasswordAuthenticator(user, password))
+            ClusterOptions(PasswordAuthenticator(user, password),
+                           timeout_options=ClusterTimeoutOptions(
+                               kv_timeout=timedelta(seconds=120),
+                               query_timeout=timedelta(seconds=120),
+                               search_timeout=timedelta(seconds=120)
+                           ))
         )
         
         try:
@@ -188,27 +239,24 @@ class EmbeddingsSearch:
             ).load_data()
 
             if documents:
-                # Разбиваем на узлы
-                nodes = self.node_parser.get_nodes_from_documents(documents)
-
-                # Добавляем метаданные к узлам
-                for node in nodes:
-                    file_path = node.metadata.get('file_path', '')
+                # Обновляем метаданные документов
+                for doc in documents:
+                    file_path = Path(doc.metadata.get('file_path', ''))
                     if file_path:
-                        file_path = Path(file_path)
-                        node.metadata.update({
-                            "file_path": str(file_path),
+                        # Используем имя файла без пути и расширения как идентификатор документа
+                        doc.doc_id = file_path.stem
+                        doc.metadata.update({
                             "file_type": file_path.suffix.lower().lstrip('.'),
                             "file_name": file_path.name,
-                            "source": str(file_path),
-                            "type": "vector"  # Добавляем тип для индекса
+                            "source": file_path.stem,
+                            "type": "vector"
                         })
 
-                # Создаем индекс и сохраняем в Couchbase
-                index = VectorStoreIndex(
-                    nodes,
+                # Создаем индекс из документов целиком
+                index = VectorStoreIndex.from_documents(
+                    documents,
                     storage_context=self.storage_context,
-                    show_progress=True  # Показываем прогресс индексации
+                    show_progress=True
                 )
 
                 file_count = len(documents)
@@ -238,10 +286,13 @@ class EmbeddingsSearch:
             )
             
             # Создаем движок для запросов с нашим промптом
-            query_engine = index.as_query_engine(
-                #text_qa_template=CHAT_TEXT_QA_PROMPT,
-                #streaming=False,
-                #verbose=True
+            query_engine = CitationQueryEngine.from_args(
+                index,
+                citation_chunk_size=1024,
+                similarity_top_k=5,
+                citation_qa_template=CITATION_QA_TEMPLATE,
+                citation_refine_template=CITATION_REFINE_TEMPLATE,
+                response_mode=ResponseMode.COMPACT
             )
             
             # Получаем ответ
