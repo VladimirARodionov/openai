@@ -252,7 +252,7 @@ class EmbeddingsSearch:
             
             # Сначала проверяем количество документов
             count_query = f"SELECT COUNT(*) as count FROM `{self.vector_store._bucket_name}`.`{self.vector_store._scope_name}`.`{self.vector_store._collection_name}`"
-            result = self.cluster.query(count_query)
+            result = self.cluster.query(count_query).rows()
             initial_count = next(result)['count']
             logger.info(f"Documents before deletion: {initial_count}")
             
@@ -261,7 +261,7 @@ class EmbeddingsSearch:
             self.cluster.query(delete_query)
             
             # Проверяем, что документы удалены
-            result = self.cluster.query(count_query)
+            result = self.cluster.query(count_query).rows()
             final_count = next(result)['count']
             logger.info(f"Documents after deletion: {final_count}")
             
