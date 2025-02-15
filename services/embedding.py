@@ -9,6 +9,7 @@ from llama_index.core import Settings, StorageContext, SimpleDirectoryReader, Ve
 from llama_index.core.base.llms.types import ChatMessage
 from llama_index.core.node_parser import SimpleNodeParser
 from llama_index.core.query_engine import CitationQueryEngine
+from llama_index.core.response_synthesizers import ResponseMode
 from llama_index.embeddings.openai import OpenAIEmbedding
 from llama_index.vector_stores.couchbase import CouchbaseVectorStore
 from couchbase.auth import PasswordAuthenticator
@@ -290,7 +291,8 @@ class EmbeddingsSearch:
                 citation_chunk_size=1024,
                 similarity_top_k=5,
                 citation_qa_template=CITATION_QA_TEMPLATE,
-                citation_refine_template=CITATION_REFINE_TEMPLATE
+                citation_refine_template=CITATION_REFINE_TEMPLATE,
+                response_mode=ResponseMode.TREE_SUMMARIZE
             )
             
             # Получаем ответ
