@@ -5,6 +5,8 @@ add .env file as copy of .env.example file
 
 pip install -r requirements.txt
 
+chmod +x init-scripts/init.sh
+sudo docker compose up -d
 python bot.py
 
 ## Создание бэкапа
