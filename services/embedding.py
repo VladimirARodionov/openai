@@ -197,7 +197,7 @@ class EmbeddingsSearch:
                         doc.metadata.update({
                             "file_type": file_path.suffix.lower().lstrip('.'),
                             "file_name": file_path.name,
-                            "source": str(file_path),
+                            "source": file_path.stem,
                             "type": "vector"
                         })
 
