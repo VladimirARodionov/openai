@@ -188,27 +188,24 @@ class EmbeddingsSearch:
             ).load_data()
 
             if documents:
-                # Разбиваем на узлы
-                nodes = self.node_parser.get_nodes_from_documents(documents)
-
-                # Добавляем метаданные к узлам
-                for node in nodes:
-                    file_path = node.metadata.get('file_path', '')
+                # Обновляем метаданные документов
+                for doc in documents:
+                    file_path = Path(doc.metadata.get('file_path', ''))
                     if file_path:
-                        file_path = Path(file_path)
-                        node.metadata.update({
-                            "file_path": str(file_path),
+                        # Используем имя файла без пути и расширения как идентификатор документа
+                        doc.doc_id = file_path.stem
+                        doc.metadata.update({
                             "file_type": file_path.suffix.lower().lstrip('.'),
                             "file_name": file_path.name,
                             "source": str(file_path),
-                            "type": "vector"  # Добавляем тип для индекса
+                            "type": "vector"
                         })
 
-                # Создаем индекс и сохраняем в Couchbase
-                index = VectorStoreIndex(
-                    nodes,
+                # Создаем индекс из документов целиком
+                index = VectorStoreIndex.from_documents(
+                    documents,
                     storage_context=self.storage_context,
-                    show_progress=True  # Показываем прогресс индексации
+                    show_progress=True
                 )
 
                 file_count = len(documents)
