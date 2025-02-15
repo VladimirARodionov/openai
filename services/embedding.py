@@ -3,7 +3,9 @@ from pathlib import Path
 
 import openai
 import tiktoken
-from llama_index.core import Settings, StorageContext, SimpleDirectoryReader, VectorStoreIndex, PromptTemplate
+from llama_cloud import MessageRole
+from llama_index.core import Settings, StorageContext, SimpleDirectoryReader, VectorStoreIndex
+from llama_index.core.base.llms.types import ChatMessage
 from llama_index.core.node_parser import SimpleNodeParser
 from llama_index.embeddings.openai import OpenAIEmbedding
 from llama_index.vector_stores.couchbase import CouchbaseVectorStore
@@ -11,6 +13,7 @@ from couchbase.auth import PasswordAuthenticator
 from couchbase.cluster import Cluster
 from couchbase.options import ClusterOptions
 from llama_index.llms.openai import OpenAI
+from llama_index.core.prompts import ChatPromptTemplate
 
 from create_bot import env_config
 
@@ -26,12 +29,36 @@ def logging_post(self, *args, **kwargs):
     return response
 openai.OpenAI.post = logging_post
 
-qa_template = PromptTemplate(
-    "Используй приведенные ниже тексты для ответа на вопрос.\n"
-    "Если ответ не найден в текстах, напиши 'Не могу найти ответ.'\n"
-    "Тексты: {context_str}\n"
-    "Вопрос: {query_str}\n"
+# Определяем шаблоны сообщений для чата
+
+TEXT_QA_SYSTEM_PROMPT = ChatMessage(
+    content=(
+        "Ты - помощник, который отвечает на вопросы, используя только предоставленную информацию. "
+        "Твоя задача - давать точные ответы, основываясь исключительно на контексте. "
+        "Если в контексте нет информации для ответа, скажи 'Не могу найти ответ в предоставленных документах.'"
+    ),
+    role=MessageRole.SYSTEM,
 )
+
+TEXT_QA_PROMPT_TMPL_MSGS = [
+    TEXT_QA_SYSTEM_PROMPT,
+    ChatMessage(
+        content=(
+            "Контекст:\n"
+            "---------------------\n"
+            "{context_str}\n"
+            "---------------------\n"
+            "Ответь на вопрос, используя только информацию из контекста выше. "
+            "Если не можешь найти ответ в контексте, скажи 'Не могу найти ответ в предоставленных документах.'"
+            "Вопрос: {query_str}\n"
+            "Ответ: "
+        ),
+        role=MessageRole.USER,
+    ),
+]
+
+# Создаем шаблон чата
+CHAT_TEXT_QA_PROMPT = ChatPromptTemplate(message_templates=TEXT_QA_PROMPT_TMPL_MSGS)
 
 class EmbeddingsSearch:
     def __init__(self, embedding_model, model, user, password):
@@ -196,17 +223,21 @@ class EmbeddingsSearch:
             index = VectorStoreIndex.from_vector_store(
                 self.vector_store
             )
-
-            # Создаем движок для запросов
-            query_engine = index.as_query_engine()
-
+            
+            # Создаем движок для запросов с нашим промптом
+            query_engine = index.as_query_engine(
+                text_qa_template=CHAT_TEXT_QA_PROMPT,
+                streaming=False,
+                verbose=True
+            )
+            
             # Получаем ответ
             response = query_engine.query(query)
-
+            
             if print_message:
                 logger.info(f"Query: {query}")
                 logger.info(f"Response: {response}")
-
+            
             return str(response)
             
         except Exception as e:
