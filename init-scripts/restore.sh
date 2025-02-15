@@ -29,14 +29,12 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-# Очищаем существующий bucket перед восстановлением
+# Очищаем существующий bucket через N1QL
 echo "Clearing existing bucket..."
-/opt/couchbase/bin/couchbase-cli bucket-flush \
-    -c localhost \
+/opt/couchbase/bin/cbq -e localhost:8093 \
     -u ${COUCHBASE_ADMINISTRATOR_USERNAME} \
     -p ${COUCHBASE_ADMINISTRATOR_PASSWORD} \
-    --bucket vector_store \
-    --force
+    --script="DELETE FROM vector_store._default._default"
 
 # Выполняем восстановление
 /opt/couchbase/bin/cbbackupmgr restore \
