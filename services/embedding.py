@@ -23,10 +23,15 @@ logger = logging.getLogger(__name__)
 # Настраиваем логирование запросов OpenAI
 original_post = openai.OpenAI.post
 def logging_post(self, *args, **kwargs):
+    # Проверяем флаг логирования в текущем экземпляре
+    if hasattr(self, '_disable_logging') and self._disable_logging:
+        return original_post(self, *args, **kwargs)
+    
     logger.info(f"OpenAI request args: {args} {kwargs}")
     response = original_post(self, *args, **kwargs)
     logger.info(f"OpenAI response: {response}")
     return response
+
 openai.OpenAI.post = logging_post
 
 # Определяем шаблоны сообщений для чата
@@ -160,6 +165,9 @@ class EmbeddingsSearch:
             directory_path (str): Путь к директории с документами
         """
         try:
+            # Отключаем логирование OpenAI запросов
+            openai.OpenAI._disable_logging = True
+            
             # Используем SimpleDirectoryReader для загрузки всех поддерживаемых файлов
             documents = SimpleDirectoryReader(
                 input_dir=directory_path,
@@ -205,12 +213,19 @@ class EmbeddingsSearch:
 
                 file_count = len(documents)
                 logger.info(f"Обработано файлов: {file_count}")
-
+                
+                # Включаем логирование обратно
+                openai.OpenAI._disable_logging = False
+                
                 return f"Загружено {file_count} файлов"
             else:
+                # Включаем логирование обратно
+                openai.OpenAI._disable_logging = False
                 return "Не найдено поддерживаемых файлов в указанной директории"
             
         except Exception as e:
+            # Включаем логирование обратно даже в случае ошибки
+            openai.OpenAI._disable_logging = False
             logger.exception(f"Ошибка при загрузке документов: {str(e)}")
             return f"Произошла ошибка при загрузке документов: {str(e)}"
 
