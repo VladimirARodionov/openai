@@ -5,4 +5,28 @@ openai
 SQLAlchemy==2.0.35
 alembic==1.14.0
 fluent.runtime==0.4.0
+tiktoken
+python-docx
+PyPDF2
+jieba
+sqlite_vec
+sqlitefts
+sqlalchemy-vectorstores[sqlite]
+llama-index
+llama-index-vector-stores-couchbase
+couchbase
+# Для работы с различными форматами файлов
+unstructured[all-docs]
+pytesseract
+python-magic
+python-pptx
+beautifulsoup4
+markdown
+pdfminer.six
+# Для работы с аудио
+openai-whisper
+# Для работы с изображениями
+pillow
+transformers
+torch
 

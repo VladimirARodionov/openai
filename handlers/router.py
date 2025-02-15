@@ -5,13 +5,13 @@ from aiogram.filters import CommandStart, Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.types import Message
-from openai import OpenAI
 
 from create_bot import env_config
 from filters.filter import IsAllowed, IsSuperUser
 from keyboards.kbs import back_kb, main_kb
 from locale_config import i18n
 from services.common import add_user, delete_user, list_users
+from services.embedding import EmbeddingsSearch
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -91,29 +91,27 @@ async def process_delete_user(message: Message, state: FSMContext):
         await message.answer(i18n.format_value("not_success_delete_user_text"), reply_markup=main_kb(message.from_user.id))
 
 
-client = OpenAI(
-    api_key=env_config.get('OPEN_AI_TOKEN'),  # This is the default and can be omitted
-)
 model=env_config.get('MODEL')
 
-def ask_gpt(prompt):
-    try:
-        response = client.chat.completions.create(
-            messages=[
-                {
-                    "role": "user",
-                    "content": prompt,
-                }
-            ],
-            model=model,
-        )
+searcher = EmbeddingsSearch(env_config.get('EMBEDDING_MODEL'),
+                            model,
+                            env_config.get('COUCHBASE_ADMINISTRATOR_USERNAME'),
+                            env_config.get('COUCHBASE_ADMINISTRATOR_PASSWORD'))
 
-        return response.choices[0].message.content
-    except Exception as e:
-        logger.exception(str(e))
-        return "OpenAI вернул ошибку: " + str(e)
+@router.message(Command('load_from_dir'), IsSuperUser())
+async def load_from_dir(message: Message):
+    response = searcher.load_documents_from_directory('load')
+    await message.answer(response, reply_markup=main_kb(message.from_user.id))
+
+
+@router.message(Command('clear_database'), IsSuperUser())
+async def clear_database(message: Message):
+    response = searcher.clear_database()
+    await message.answer(response, reply_markup=main_kb(message.from_user.id))
+
 
 @router.message(F.text, IsAllowed())
 async def chat_with_gpt(message):
-    response = ask_gpt(message.text)
+    #response = ask_gpt(message.text)
+    response = searcher.ask(message.text, True)
     await message.answer(response, reply_markup=main_kb(message.from_user.id))
