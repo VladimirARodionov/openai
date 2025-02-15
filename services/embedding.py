@@ -3,7 +3,7 @@ from pathlib import Path
 
 import openai
 import tiktoken
-from llama_index.core import Settings, StorageContext, SimpleDirectoryReader, VectorStoreIndex
+from llama_index.core import Settings, StorageContext, SimpleDirectoryReader, VectorStoreIndex, PromptTemplate
 from llama_index.core.node_parser import SimpleNodeParser
 from llama_index.embeddings.openai import OpenAIEmbedding
 from llama_index.vector_stores.couchbase import CouchbaseVectorStore
@@ -15,6 +15,23 @@ from llama_index.llms.openai import OpenAI
 from create_bot import env_config
 
 logger = logging.getLogger(__name__)
+
+
+# Настраиваем логирование запросов OpenAI
+original_post = openai.OpenAI.post
+def logging_post(self, *args, **kwargs):
+    logger.info(f"OpenAI request args: {args} {kwargs}")
+    response = original_post(self, *args, **kwargs)
+    logger.info(f"OpenAI response: {response}")
+    return response
+openai.OpenAI.post = logging_post
+
+qa_template = PromptTemplate(
+    "Используй приведенные ниже тексты для ответа на вопрос.\n"
+    "Если ответ не найден в текстах, напиши 'Не могу найти ответ.'\n"
+    "Тексты: {context_str}\n"
+    "Вопрос: {query_str}\n"
+)
 
 class EmbeddingsSearch:
     def __init__(self, embedding_model, model, user, password):
@@ -118,7 +135,6 @@ class EmbeddingsSearch:
             directory_path (str): Путь к директории с документами
         """
         try:
-            file_count = 0
             # Используем SimpleDirectoryReader для загрузки всех поддерживаемых файлов
             documents = SimpleDirectoryReader(
                 input_dir=directory_path,
@@ -137,18 +153,13 @@ class EmbeddingsSearch:
                 ],
                 exclude_hidden=True
             ).load_data()
-            
+
             if documents:
                 # Разбиваем на узлы
                 nodes = self.node_parser.get_nodes_from_documents(documents)
-                
-                # Создаем эмбеддинги для всех узлов сразу
-                embeddings = Settings.embed_model.get_text_embedding_batch(
-                    [node.text for node in nodes]
-                )
-                
-                # Добавляем метаданные и эмбеддинги к узлам
-                for node, embedding in zip(nodes, embeddings):
+
+                # Добавляем метаданные к узлам
+                for node in nodes:
                     file_path = node.metadata.get('file_path', '')
                     if file_path:
                         file_path = Path(file_path)
@@ -157,16 +168,19 @@ class EmbeddingsSearch:
                             "file_type": file_path.suffix.lower().lstrip('.'),
                             "file_name": file_path.name,
                             "source": str(file_path),
-                            "type": "vector",  # Добавляем тип для индекса
-                            "embedding": embedding  # Сохраняем эмбеддинг
+                            "type": "vector"  # Добавляем тип для индекса
                         })
-                
-                # Сохраняем узлы в Couchbase
-                self.vector_store.add_nodes(nodes)  # Используем add_nodes вместо add
-                
+
+                # Создаем индекс и сохраняем в Couchbase
+                index = VectorStoreIndex(
+                    nodes,
+                    storage_context=self.storage_context,
+                    show_progress=True  # Показываем прогресс индексации
+                )
+
                 file_count = len(documents)
                 logger.info(f"Обработано файлов: {file_count}")
-                
+
                 return f"Загружено {file_count} файлов"
             else:
                 return "Не найдено поддерживаемых файлов в указанной директории"
@@ -182,65 +196,17 @@ class EmbeddingsSearch:
             index = VectorStoreIndex.from_vector_store(
                 self.vector_store
             )
-            
-            # Создаем движок для запросов с кастомным поиском
-            from llama_index.core.query_engine import RetrieverQueryEngine
-            from llama_index.core.retrievers import VectorIndexRetriever
-            from llama_index.core.response_synthesizers import get_response_synthesizer
-            from llama_index.core.prompts import PromptTemplate
-            from llama_index.core.response_synthesizers import ResponseMode
-            
-            # Создаем эмбеддинг для запроса один раз
-            query_embedding = Settings.embed_model.get_text_embedding(query)
-            
-            # Создаем кастомный retriever
-            retriever = VectorIndexRetriever(
-                index=index,
-                similarity_top_k=2,
-                vector_store=self.vector_store,
-            )
-            retriever._get_query_embedding = lambda _: query_embedding
-            
-            # Создаем кастомный текст промпта
-            qa_template = PromptTemplate(
-                "Используй приведенные ниже тексты для ответа на вопрос.\n"
-                "Если ответ не найден в текстах, напиши 'Не могу найти ответ.'\n"
-                "Тексты: {context_str}\n"
-                "Вопрос: {query_str}\n"
-                "Ответ: "
-            )
-            
-            # Создаем response synthesizer с нашим промптом
-            response_synthesizer = get_response_synthesizer(
-                response_mode=ResponseMode.COMPACT,
-                text_qa_template=qa_template
-            )
-            
-            # Создаем query engine с нашими компонентами
-            query_engine = RetrieverQueryEngine(
-                retriever=retriever,
-                response_synthesizer=response_synthesizer,
-            )
-            
-            # Настраиваем логирование запросов OpenAI
-            original_post = openai.OpenAI.post
-            def logging_post(self, *args, **kwargs):
-                logger.info(f"OpenAI request args: {args} {kwargs}")
-                response = original_post(self, *args, **kwargs)
-                logger.info(f"OpenAI response: {response}")
-                return response
-            openai.OpenAI.post = logging_post
-            
+
+            # Создаем движок для запросов
+            query_engine = index.as_query_engine()
+
             # Получаем ответ
             response = query_engine.query(query)
-            
-            # Восстанавливаем оригинальный метод
-            openai.OpenAI.post = original_post
-            
+
             if print_message:
                 logger.info(f"Query: {query}")
                 logger.info(f"Response: {response}")
-            
+
             return str(response)
             
         except Exception as e:
