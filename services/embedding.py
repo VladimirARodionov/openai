@@ -5,9 +5,10 @@ from pathlib import Path
 import openai
 import tiktoken
 from llama_cloud import MessageRole
-from llama_index.core import Settings, StorageContext, SimpleDirectoryReader, VectorStoreIndex
+from llama_index.core import Settings, StorageContext, SimpleDirectoryReader, VectorStoreIndex, PromptTemplate
 from llama_index.core.base.llms.types import ChatMessage
 from llama_index.core.node_parser import SimpleNodeParser
+from llama_index.core.query_engine import CitationQueryEngine
 from llama_index.embeddings.openai import OpenAIEmbedding
 from llama_index.vector_stores.couchbase import CouchbaseVectorStore
 from couchbase.auth import PasswordAuthenticator
@@ -63,6 +64,49 @@ TEXT_QA_PROMPT_TMPL_MSGS = [
 
 # Создаем шаблон чата
 CHAT_TEXT_QA_PROMPT = ChatPromptTemplate(message_templates=TEXT_QA_PROMPT_TMPL_MSGS)
+
+CITATION_QA_TEMPLATE = PromptTemplate(
+    "Этот GPT предназначен для анализа загруженных книг, и ответов основываясь исключительно на этих книгах. "
+    "Он ищет релевантную информацию в текстах и формулирует ответ строго цитатами "
+    "(цитаты нужно выделить '' и нужно после цитаты номер шлоки (шлока это нумерация в документе) и название документа откуда взята цитата, "
+    "без добавления собственных интерпретаций. Если необходимая информация отсутствует в загруженных данных GPT прямо сообщает, что данных нет. "
+    "Ответы должны сохранять естественность и динамику общения, но ограничиваться только найденными цитатами. "
+    "Цитаты нужно выделять кавычками цитат."
+    "После показа ответа нужно привести список вопросов которыми обычно интересуются на эту тему."
+    "Например:\n"
+    "Источник: Зов\n"
+    "1.002. Нью-Йорк. 1921 Январь 1. Жизни счастье найди в творчестве, и око обрати в пустыню.\n"
+    "Источник: Озарение\n"
+    "2.1.5.3. Думайте каждый день, как закончить Мое дело.\n"
+    "\n------\n"
+    "{context_str}"
+    "\n------\n"
+    "Query: {query_str}\n"
+    "Answer: "
+)
+
+CITATION_REFINE_TEMPLATE = PromptTemplate(
+    "Этот GPT предназначен для анализа загруженных книг, и ответов основываясь исключительно на этих книгах. "
+    "Он ищет релевантную информацию в текстах и формулирует ответ строго цитатами "
+    "(цитаты нужно выделить '' и нужно после цитаты номер шлоки (шлока это нумерация в документе) и название документа откуда взята цитата, "
+    "без добавления собственных интерпретаций. Если необходимая информация отсутствует в загруженных данных GPT прямо сообщает, что данных нет. "
+    "Ответы должны сохранять естественность и динамику общения, но ограничиваться только найденными цитатами. "
+    "Цитаты нужно выделять кавычками цитат."
+    "После показа ответа нужно привести список вопросов которыми обычно интересуются на эту тему."
+    "Например:\n"
+    "Источник: Зов\n"
+    "1.002. Нью-Йорк. 1921 Январь 1. Жизни счастье найди в творчестве, и око обрати в пустыню.\n"
+    "Источник: Озарение\n"
+    "2.1.5.3. Думайте каждый день, как закончить Мое дело.\n"
+    "If the provided sources are not helpful, you will repeat the existing answer."
+    "\nBegin refining!"
+    "\n------\n"
+    "{context_str}"
+    "\n------\n"
+    "Query: {query_str}\n"
+    "Answer: "
+)
+
 
 class EmbeddingsSearch:
     def __init__(self, embedding_model, model, user, password):
@@ -241,10 +285,12 @@ class EmbeddingsSearch:
             )
             
             # Создаем движок для запросов с нашим промптом
-            query_engine = index.as_query_engine(
-                #text_qa_template=CHAT_TEXT_QA_PROMPT,
-                #streaming=False,
-                #verbose=True
+            query_engine = CitationQueryEngine.from_args(
+                index,
+                citation_chunk_size=1024,
+                similarity_top_k=5,
+                citation_qa_template=CITATION_QA_TEMPLATE,
+                citation_refine_template=CITATION_REFINE_TEMPLATE
             )
             
             # Получаем ответ
