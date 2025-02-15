@@ -245,12 +245,35 @@ class EmbeddingsSearch:
     def clear_database(self):
         """Очистка базы данных"""
         try:
-            # Удаляем все документы
-            query = f"DELETE FROM `{self.vector_store._bucket_name}`.`{self.vector_store._scope_name}`.`{self.vector_store._collection_name}`"
-            self.cluster.query(query)
+            # Получаем доступ к коллекции
+            bucket = self.cluster.bucket(self.vector_store._bucket_name)
+            scope = bucket.scope(self.vector_store._scope_name)
+            collection = scope.collection(self.vector_store._collection_name)
             
-            logger.info("База данных очищена")
-            return "База данных очищена"
+            # Сначала проверяем количество документов
+            count_query = f"SELECT COUNT(*) as count FROM `{self.vector_store._bucket_name}`.`{self.vector_store._scope_name}`.`{self.vector_store._collection_name}`"
+            result = self.cluster.query(count_query)
+            initial_count = next(result)['count']
+            logger.info(f"Documents before deletion: {initial_count}")
+            
+            # Удаляем все документы
+            delete_query = f"DELETE FROM `{self.vector_store._bucket_name}`.`{self.vector_store._scope_name}`.`{self.vector_store._collection_name}`"
+            self.cluster.query(delete_query)
+            
+            # Проверяем, что документы удалены
+            result = self.cluster.query(count_query)
+            final_count = next(result)['count']
+            logger.info(f"Documents after deletion: {final_count}")
+            
+            if final_count == 0:
+                logger.info("База данных успешно очищена")
+                return "База данных очищена"
+            else:
+                error_msg = f"Не все документы были удалены. Осталось: {final_count}"
+                logger.error(error_msg)
+                return error_msg
+            
         except Exception as e:
-            logger.exception(f"Ошибка при очистке базы данных: {str(e)}")
-            return f"Ошибка при очистке базы данных: {str(e)}"
+            error_msg = f"Ошибка при очистке базы данных: {str(e)}"
+            logger.exception(error_msg)
+            return error_msg
