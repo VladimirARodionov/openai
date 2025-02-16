@@ -148,3 +148,16 @@ def add_superusers():
         session.rollback()
     finally:
         session.close()
+
+def get_search_from_inet(user_id) -> bool:
+    session = Session(db)
+    try:
+        user = session.get(User, user_id)
+        if not user:
+            return i18n.format_value("user_not_found")
+        search_from_inet = user.search_from_inet
+    except Exception:
+        logger.exception('Ошибка при проверке режима поиска из интернета')
+        session.rollback()
+    finally:
+        session.close()

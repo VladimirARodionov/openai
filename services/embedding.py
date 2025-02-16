@@ -17,11 +17,9 @@ from couchbase.cluster import Cluster
 from couchbase.options import ClusterOptions, ClusterTimeoutOptions
 from llama_index.llms.openai import OpenAI
 from llama_index.core.prompts import ChatPromptTemplate
-from sqlalchemy.orm import Session
 
-from create_bot import env_config, db
-from db.models.model import User
-from locale_config import i18n
+from create_bot import env_config
+from services.common import get_search_from_inet
 
 logger = logging.getLogger(__name__)
 
@@ -74,12 +72,54 @@ TEXT_QA_PROMPT_TMPL_MSGS = [
 CHAT_TEXT_QA_PROMPT = ChatPromptTemplate(message_templates=TEXT_QA_PROMPT_TMPL_MSGS)
 
 CITATION_QA_TEMPLATE = PromptTemplate(read_from_file("templates/citation_qa_template.txt"))
-print(CITATION_QA_TEMPLATE)
 CITATION_REFINE_TEMPLATE = PromptTemplate(read_from_file("templates/citation_refine_template.txt"))
 
 CITATION_QA_TEMPLATE_INTERNET = PromptTemplate(read_from_file("templates/citation_qa_template_internet.txt"))
 
 CITATION_REFINE_TEMPLATE_INTERNET = PromptTemplate(read_from_file("templates/citation_refine_template_internet.txt"))
+
+
+def _create_query_engine(index, search_from_inet:bool, top_k:int = 20):
+    query_engine = CitationQueryEngine.from_args(
+        index,
+        citation_chunk_size=1024,
+        similarity_top_k=top_k or env_config.get('SIMILARITY_TOP_K', 10),
+        citation_qa_template=CITATION_QA_TEMPLATE_INTERNET if search_from_inet else CITATION_QA_TEMPLATE,
+        citation_refine_template=CITATION_REFINE_TEMPLATE_INTERNET if search_from_inet else CITATION_REFINE_TEMPLATE,
+        response_mode=ResponseMode.COMPACT
+    )
+    return query_engine
+
+
+def _extract_topics(text: str) -> list[str]:
+    """Извлечение основных тем из текста
+
+    Args:
+        text (str): Анализируемый текст
+
+    Returns:
+        list[str]: Список основных тем
+    """
+    try:
+        # Создаем промпт для выделения тем
+        prompt = PromptTemplate(
+            "Проанализируй следующий текст и выдели 3-5 основных тем или ключевых понятий:\n"
+            "{text}\n"
+            "Темы:"
+        )
+
+        # Используем GPT для анализа
+        response = Settings.llm.complete(prompt.format(text=text[:1000]))  # Ограничиваем длину текста
+
+        # Разбираем ответ
+        topics = [topic.strip().lower() for topic in str(response).split('\n') if topic.strip()]
+
+        return topics
+
+    except Exception as e:
+        logger.warning(f"Ошибка при извлечении тем: {str(e)}")
+        return []
+
 
 class EmbeddingsSearch:
     def __init__(self):
@@ -252,18 +292,7 @@ class EmbeddingsSearch:
 
     def ask(self, query, user_id, print_message=False):
         """Ответ на вопрос с использованием GPT и релевантных текстов"""
-        search_from_inet = False
-        session = Session(db)
-        try:
-            user = session.get(User, user_id)
-            if not user:
-                return i18n.format_value("user_not_found")
-            search_from_inet = user.search_from_inet
-        except Exception:
-            logger.exception('Ошибка при проверке режима поиска из интернета')
-            session.rollback()
-        finally:
-            session.close()
+        search_from_inet = get_search_from_inet(user_id)
         try:
             # Создаем индекс для поиска
             index = VectorStoreIndex.from_vector_store(
@@ -271,15 +300,7 @@ class EmbeddingsSearch:
             )
             
             # Создаем движок для запросов с нашим промптом
-            query_engine = CitationQueryEngine.from_args(
-                index,
-                citation_chunk_size=1024,
-                similarity_top_k=env_config.get('SIMILARITY_TOP_K', 10),
-                citation_qa_template=CITATION_QA_TEMPLATE_INTERNET if search_from_inet else CITATION_QA_TEMPLATE,
-                citation_refine_template=CITATION_REFINE_TEMPLATE_INTERNET if search_from_inet else CITATION_REFINE_TEMPLATE,
-                response_mode=ResponseMode.COMPACT
-            )
-            
+            query_engine = _create_query_engine(index, search_from_inet)
             # Получаем ответ
             response = query_engine.query(query)
             
@@ -292,6 +313,63 @@ class EmbeddingsSearch:
         except Exception as e:
             logger.exception(str(e))
             return f"Произошла ошибка: {str(e)}"
+
+    def report(self, query: str, user_id, print_message=False):
+        """Формирование детального отчета по запросу"""
+        try:
+            search_from_inet = get_search_from_inet(user_id)
+            
+            # Создаем индекс для поиска
+            index = VectorStoreIndex.from_vector_store(self.vector_store)
+            
+            # Настраиваем поиск с большим количеством результатов для анализа
+            query_engine = _create_query_engine(index, search_from_inet, top_k=20)
+            
+            # Получаем результаты поиска через retriever индекса
+            retriever = index.as_retriever(similarity_top_k=20)
+            search_results = retriever.retrieve(query)
+            
+            # Анализируем найденные источники
+            sources = {}
+            topics = {}
+            total_chunks = len(search_results)
+            
+            for node in search_results:
+                # Подсчет источников
+                source = node.metadata.get('source', 'Unknown')
+                sources[source] = sources.get(source, 0) + 1
+                
+                # Анализ текста для выделения основных тем
+                text = node.text.lower()
+                for topic in _extract_topics(text):
+                    topics[topic] = topics.get(topic, 0) + 1
+            
+            # Формируем отчет
+            report_parts = []
+            
+            # 1. Основной ответ на вопрос
+            main_response = query_engine.query(query)
+            report_parts.append(f"🔍 Основной ответ:\n\n{str(main_response)}\n")
+            
+            # 2. Статистика по источникам
+            report_parts.append("\n📚 Источники информации:")
+            for source, count in sources.items():
+                percentage = (count / total_chunks) * 100
+                report_parts.append(f"- {source}: {count} фрагментов ({percentage:.1f}%)")
+            
+            # 3. Анализ основных тем
+            if topics:
+                report_parts.append("\n📊 Основные темы:")
+                sorted_topics = sorted(topics.items(), key=lambda x: x[1], reverse=True)[:5]
+                for topic, count in sorted_topics:
+                    percentage = (count / total_chunks) * 100
+                    report_parts.append(f"- {topic}: встречается {count} раз ({percentage:.1f}%)")
+            
+            return "\n".join(report_parts)
+            
+        except Exception as e:
+            logger.exception(str(e))
+            return f"Произошла ошибка при формировании отчета: {str(e)}"
 
     def clear_database(self):
         """Очистка базы данных"""
