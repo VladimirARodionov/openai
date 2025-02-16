@@ -296,7 +296,6 @@ class EmbeddingsSearch:
         """Ответ на вопрос с использованием GPT и релевантных текстов"""
         try:
             search_from_inet = get_search_from_inet(user_id)
-            print(search_from_inet)
             response_parts = []
             
             # 1. Поиск в локальных документах
@@ -337,7 +336,6 @@ class EmbeddingsSearch:
         """Формирование детального отчета по запросу"""
         try:
             search_from_inet = get_search_from_inet(user_id)
-            print(search_from_inet)
             report_parts = []
             
             # Создаем индекс для поиска в локальных документах
