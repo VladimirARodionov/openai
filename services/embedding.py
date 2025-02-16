@@ -5,7 +5,7 @@ from pathlib import Path
 import openai
 import tiktoken
 from llama_cloud import MessageRole
-from llama_index.core import Settings, StorageContext, SimpleDirectoryReader, VectorStoreIndex, PromptTemplate
+from llama_index.core import Settings, StorageContext, SimpleDirectoryReader, VectorStoreIndex, PromptTemplate, Document
 from llama_index.core.base.llms.types import ChatMessage
 from llama_index.core.node_parser import SimpleNodeParser
 from llama_index.core.query_engine import CitationQueryEngine
@@ -322,48 +322,42 @@ class EmbeddingsSearch:
             # Создаем индекс для поиска
             index = VectorStoreIndex.from_vector_store(self.vector_store)
             
-            # Настраиваем поиск с большим количеством результатов для анализа
-            query_engine = _create_query_engine(index, search_from_inet, top_k=20)
-            
-            # Получаем результаты поиска через retriever индекса
-            retriever = index.as_retriever(similarity_top_k=20)
-            search_results = retriever.retrieve(query)
-            
-            # Анализируем найденные источники
-            sources = {}
-            topics = {}
-            total_chunks = len(search_results)
-            
-            for node in search_results:
-                # Подсчет источников
-                source = node.metadata.get('source', 'Unknown')
-                sources[source] = sources.get(source, 0) + 1
-                
-                # Анализ текста для выделения основных тем
-                text = node.text.lower()
-                for topic in _extract_topics(text):
-                    topics[topic] = topics.get(topic, 0) + 1
+            # Получаем релевантные ноды с метаданными
+            retriever = index.as_retriever(similarity_top_k=10)
+            nodes = retriever.retrieve(query)
             
             # Формируем отчет
             report_parts = []
             
-            # 1. Основной ответ на вопрос
+            # 1. Основной ответ
+            query_engine = _create_query_engine(index, search_from_inet)
             main_response = query_engine.query(query)
             report_parts.append(f"🔍 Основной ответ:\n\n{str(main_response)}\n")
             
-            # 2. Статистика по источникам
-            report_parts.append("\n📚 Источники информации:")
-            for source, count in sources.items():
-                percentage = (count / total_chunks) * 100
-                report_parts.append(f"- {source}: {count} фрагментов ({percentage:.1f}%)")
+            # 2. Краткое саммари
+            documents = [
+                Document(
+                    text=node.text,
+                    metadata=node.metadata
+                ) for node in nodes
+            ]
             
-            # 3. Анализ основных тем
-            if topics:
-                report_parts.append("\n📊 Основные темы:")
-                sorted_topics = sorted(topics.items(), key=lambda x: x[1], reverse=True)[:5]
-                for topic, count in sorted_topics:
-                    percentage = (count / total_chunks) * 100
-                    report_parts.append(f"- {topic}: встречается {count} раз ({percentage:.1f}%)")
+            from llama_index.core import SummaryIndex
+            summary_index = SummaryIndex.from_documents(documents)
+            summary = summary_index.as_query_engine().query(
+                "Создай краткое саммари найденной информации в 2-3 предложения"
+            )
+            report_parts.append(f"\n📝 Краткое саммари:\n{str(summary)}\n")
+            
+            # 3. Источники информации
+            sources = {}
+            for node in nodes:
+                source = node.metadata.get('source', 'Unknown')
+                sources[source] = sources.get(source, 0) + 1
+            
+            report_parts.append("\n📚 Основные источники:")
+            for source, count in sorted(sources.items(), key=lambda x: x[1], reverse=True)[:5]:
+                report_parts.append(f"- {source}: {count} релевантных фрагментов")
             
             return "\n".join(report_parts)
             
