@@ -78,14 +78,16 @@ CITATION_QA_TEMPLATE_INTERNET = PromptTemplate(read_from_file("templates/citatio
 
 CITATION_REFINE_TEMPLATE_INTERNET = PromptTemplate(read_from_file("templates/citation_refine_template_internet.txt"))
 
+INTERNET_QA_TEMPLATE = PromptTemplate(read_from_file("templates/internet_qa_template.txt"))
+INTERNET_REPORT_TEMPLATE = PromptTemplate(read_from_file("templates/internet_report_template.txt"))
 
-def _create_query_engine(index, search_from_inet:bool, top_k:int = 20):
+def _create_query_engine(index, top_k:int = 20):
     query_engine = CitationQueryEngine.from_args(
         index,
         citation_chunk_size=1024,
         similarity_top_k=top_k or env_config.get('SIMILARITY_TOP_K', 10),
-        citation_qa_template=CITATION_QA_TEMPLATE_INTERNET if search_from_inet else CITATION_QA_TEMPLATE,
-        citation_refine_template=CITATION_REFINE_TEMPLATE_INTERNET if search_from_inet else CITATION_REFINE_TEMPLATE,
+        citation_qa_template=CITATION_QA_TEMPLATE,
+        citation_refine_template=CITATION_REFINE_TEMPLATE,
         response_mode=ResponseMode.COMPACT
     )
     return query_engine
@@ -292,23 +294,39 @@ class EmbeddingsSearch:
 
     def ask(self, query, user_id, print_message=False):
         """Ответ на вопрос с использованием GPT и релевантных текстов"""
-        search_from_inet = get_search_from_inet(user_id)
         try:
-            # Создаем индекс для поиска
-            index = VectorStoreIndex.from_vector_store(
-                self.vector_store
-            )
+            search_from_inet = get_search_from_inet(user_id)
+            response_parts = []
             
-            # Создаем движок для запросов с нашим промптом
-            query_engine = _create_query_engine(index, search_from_inet)
-            # Получаем ответ
-            response = query_engine.query(query)
+            # 1. Поиск в локальных документах
+            index = VectorStoreIndex.from_vector_store(self.vector_store)
+            query_engine = _create_query_engine(index)
+            local_response = query_engine.query(query)
+            response_parts.append(str(local_response))
+            
+            # 2. Поиск в интернете через GPT, если включен
+            if search_from_inet:
+                try:
+                    # Используем шаблон для поиска в интернете
+                    internet_response = Settings.llm.complete(
+                        INTERNET_QA_TEMPLATE.format(
+                            query_str=query,
+                            local_response=str(local_response)
+                        )
+                    )
+                    
+                    if str(internet_response).strip():
+                        response_parts.append("\n\n🌐 Дополнительная информация из интернета:\n" + str(internet_response))
+                
+                except Exception as e:
+                    logger.warning(f"Ошибка при поиске в интернете: {str(e)}")
+                    response_parts.append("\n⚠️ Не удалось получить информацию из интернета")
             
             if print_message:
                 logger.info(f"Query: {query}")
-                logger.info(f"Response: {response}")
+                logger.info(f"Response: {response_parts}")
             
-            return str(response)
+            return "\n".join(response_parts)
             
         except Exception as e:
             logger.exception(str(e))
@@ -318,43 +336,60 @@ class EmbeddingsSearch:
         """Формирование детального отчета по запросу"""
         try:
             search_from_inet = get_search_from_inet(user_id)
+            report_parts = []
             
-            # Создаем индекс для поиска
+            # Создаем индекс для поиска в локальных документах
             index = VectorStoreIndex.from_vector_store(self.vector_store)
             
             # Получаем релевантные ноды с метаданными
             retriever = index.as_retriever(similarity_top_k=10)
             nodes = retriever.retrieve(query)
             
-            # Формируем отчет
-            report_parts = []
-            
-            # 1. Основной ответ
-            query_engine = _create_query_engine(index, search_from_inet)
+            # 1. Основной ответ из локальных документов
+            query_engine = _create_query_engine(index)
             main_response = query_engine.query(query)
-            report_parts.append(f"🔍 Основной ответ:\n\n{str(main_response)}\n")
+            report_parts.append(f"🔍 Основной ответ из документов:\n\n{str(main_response)}\n")
             
-            # 2. Краткое саммари
-            documents = [
-                Document(
-                    text=node.text,
-                    metadata=node.metadata
-                ) for node in nodes
-            ]
+            # 2. Краткое саммари локальных документов
+            if nodes:
+                documents = [
+                    Document(
+                        text=node.text,
+                        metadata=node.metadata
+                    ) for node in nodes
+                ]
+                
+                summary_index = SummaryIndex.from_documents(documents)
+                summary = summary_index.as_query_engine().query(
+                    "Создай краткое саммари найденной информации в 2-3 предложения"
+                )
+                report_parts.append(f"\n📝 Краткое саммари локальных документов:\n{str(summary)}\n")
             
-            summary_index = SummaryIndex.from_documents(documents)
-            summary = summary_index.as_query_engine().query(
-                "Создай краткое саммари найденной информации в 2-3 предложения"
-            )
-            report_parts.append(f"\n📝 Краткое саммари:\n{str(summary)}\n")
+            # 3. Поиск в интернете через GPT, если включен
+            if search_from_inet:
+                try:
+                    # Используем шаблон для детального отчета
+                    internet_response = Settings.llm.complete(
+                        INTERNET_REPORT_TEMPLATE.format(
+                            query_str=query,
+                            local_info=str(main_response)
+                        )
+                    )
+                    
+                    if str(internet_response).strip():
+                        report_parts.append("\n🌐 Информация из интернета:\n" + str(internet_response))
+                
+                except Exception as e:
+                    logger.warning(f"Ошибка при поиске в интернете: {str(e)}")
+                    report_parts.append("\n⚠️ Не удалось получить информацию из интернета")
             
-            # 3. Источники информации
+            # 4. Источники информации из локальных документов
             sources = {}
             for node in nodes:
                 source = node.metadata.get('source', 'Unknown')
                 sources[source] = sources.get(source, 0) + 1
             
-            report_parts.append("\n📚 Основные источники:")
+            report_parts.append("\n📚 Основные локальные источники:")
             for source, count in sorted(sources.items(), key=lambda x: x[1], reverse=True)[:5]:
                 report_parts.append(f"- {source}: {count} релевантных фрагментов")
             
