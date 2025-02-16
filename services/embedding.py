@@ -372,7 +372,7 @@ class EmbeddingsSearch:
                     internet_response = Settings.llm.complete(
                         INTERNET_REPORT_TEMPLATE.format(
                             query_str=query,
-                            local_info=str(main_response)
+                            local_response=str(main_response)
                         )
                     )
                     
