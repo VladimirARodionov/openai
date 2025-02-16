@@ -17,10 +17,17 @@ from couchbase.cluster import Cluster
 from couchbase.options import ClusterOptions, ClusterTimeoutOptions
 from llama_index.llms.openai import OpenAI
 from llama_index.core.prompts import ChatPromptTemplate
+from sqlalchemy.orm import Session
 
-from create_bot import env_config
+from create_bot import env_config, db
+from db.models.model import User
+from locale_config import i18n
 
 logger = logging.getLogger(__name__)
+
+def read_from_file(file_path) -> str:
+    with open(file_path, "r", encoding="utf-8") as f:
+        return "".join(f.readlines())
 
 
 # Настраиваем логирование запросов OpenAI
@@ -66,54 +73,19 @@ TEXT_QA_PROMPT_TMPL_MSGS = [
 # Создаем шаблон чата
 CHAT_TEXT_QA_PROMPT = ChatPromptTemplate(message_templates=TEXT_QA_PROMPT_TMPL_MSGS)
 
-CITATION_QA_TEMPLATE = PromptTemplate(
-    "Этот GPT предназначен для анализа загруженных книг, и ответов основываясь исключительно на этих книгах. "
-    "Он ищет релевантную информацию в текстах и формулирует ответ строго цитатами "
-    "(цитаты нужно выделить '' и нужно после цитаты номер шлоки (шлока это нумерация в документе) и название документа откуда взята цитата, "
-    "без добавления собственных интерпретаций. Если необходимая информация отсутствует в загруженных данных GPT прямо сообщает, что данных нет. "
-    "Ответы должны сохранять естественность и динамику общения, но ограничиваться только найденными цитатами. "
-    "Цитаты нужно выделять кавычками цитат."
-    "После показа ответа нужно привести список вопросов которыми обычно интересуются на эту тему."
-    "Например:\n"
-    "Источник: Зов\n"
-    "1.002. Нью-Йорк. 1921 Январь 1. Жизни счастье найди в творчестве, и око обрати в пустыню.\n"
-    "Источник: Озарение\n"
-    "2.1.5.3. Думайте каждый день, как закончить Мое дело.\n"
-    "\n------\n"
-    "{context_str}"
-    "\n------\n"
-    "Query: {query_str}\n"
-    "Answer: "
-)
+CITATION_QA_TEMPLATE = PromptTemplate(read_from_file("templates/citation_qa_template.txt"))
+print(CITATION_QA_TEMPLATE)
+CITATION_REFINE_TEMPLATE = PromptTemplate(read_from_file("templates/citation_refine_template.txt"))
 
-CITATION_REFINE_TEMPLATE = PromptTemplate(
-    "Этот GPT предназначен для анализа загруженных книг, и ответов основываясь исключительно на этих книгах. "
-    "Он ищет релевантную информацию в текстах и формулирует ответ строго цитатами "
-    "(цитаты нужно выделить '' и нужно после цитаты номер шлоки (шлока это нумерация в документе) и название документа откуда взята цитата, "
-    "без добавления собственных интерпретаций. Если необходимая информация отсутствует в загруженных данных GPT прямо сообщает, что данных нет. "
-    "Ответы должны сохранять естественность и динамику общения, но ограничиваться только найденными цитатами. "
-    "Цитаты нужно выделять кавычками цитат."
-    "После показа ответа нужно привести список вопросов которыми обычно интересуются на эту тему."
-    "Например:\n"
-    "Источник: Зов\n"
-    "1.002. Нью-Йорк. 1921 Январь 1. Жизни счастье найди в творчестве, и око обрати в пустыню.\n"
-    "Источник: Озарение\n"
-    "2.1.5.3. Думайте каждый день, как закончить Мое дело.\n"
-    "If the provided sources are not helpful, you will repeat the existing answer."
-    "\nBegin refining!"
-    "\n------\n"
-    "{context_str}"
-    "\n------\n"
-    "Query: {query_str}\n"
-    "Answer: "
-)
+CITATION_QA_TEMPLATE_INTERNET = PromptTemplate(read_from_file("templates/citation_qa_template_internet.txt"))
 
+CITATION_REFINE_TEMPLATE_INTERNET = PromptTemplate(read_from_file("templates/citation_refine_template_internet.txt"))
 
 class EmbeddingsSearch:
-    def __init__(self, embedding_model, model, user, password):
+    def __init__(self):
         """Инициализация с API ключом OpenAI и подключением к Couchbase"""
-        self.EMBEDDING_MODEL = embedding_model
-        self.GPT_MODEL = model
+        self.EMBEDDING_MODEL = env_config.get('EMBEDDING_MODEL')
+        self.GPT_MODEL = env_config.get('MODEL')
         
         # Устанавливаем API ключ OpenAI
         openai_api_key = env_config.get('OPEN_AI_TOKEN')
@@ -122,14 +94,14 @@ class EmbeddingsSearch:
         
         # Инициализация llama-index settings с API ключом
         Settings.llm = OpenAI(
-            model=model,
+            model=self.GPT_MODEL,
             api_key=openai_api_key,
             max_retries=2,
             timeout=30,
             request_timeout=30
         )
         Settings.embed_model = OpenAIEmbedding(
-            model=embedding_model,
+            model=self.EMBEDDING_MODEL,
             api_key=openai_api_key,
             max_retries=2,
             timeout=30,
@@ -143,7 +115,8 @@ class EmbeddingsSearch:
         connection_string = f"couchbase://{couchbase_host}"
         self.cluster = Cluster.connect(
             connection_string,
-            ClusterOptions(PasswordAuthenticator(user, password),
+            ClusterOptions(PasswordAuthenticator(env_config.get('COUCHBASE_ADMINISTRATOR_USERNAME'),
+                                                 env_config.get('COUCHBASE_ADMINISTRATOR_PASSWORD')),
                            timeout_options=ClusterTimeoutOptions(
                                kv_timeout=timedelta(seconds=120),
                                query_timeout=timedelta(seconds=120),
@@ -277,8 +250,20 @@ class EmbeddingsSearch:
             logger.exception(f"Ошибка при загрузке документов: {str(e)}")
             return f"Произошла ошибка при загрузке документов: {str(e)}"
 
-    def ask(self, query, print_message=False):
+    def ask(self, query, user_id, print_message=False):
         """Ответ на вопрос с использованием GPT и релевантных текстов"""
+        search_from_inet = False
+        session = Session(db)
+        try:
+            user = session.get(User, user_id)
+            if not user:
+                return i18n.format_value("user_not_found")
+            search_from_inet = user.search_from_inet
+        except Exception:
+            logger.exception('Ошибка при проверке режима поиска из интернета')
+            session.rollback()
+        finally:
+            session.close()
         try:
             # Создаем индекс для поиска
             index = VectorStoreIndex.from_vector_store(
@@ -289,9 +274,9 @@ class EmbeddingsSearch:
             query_engine = CitationQueryEngine.from_args(
                 index,
                 citation_chunk_size=1024,
-                similarity_top_k=5,
-                citation_qa_template=CITATION_QA_TEMPLATE,
-                citation_refine_template=CITATION_REFINE_TEMPLATE,
+                similarity_top_k=env_config.get('SIMILARITY_TOP_K', 10),
+                citation_qa_template=CITATION_QA_TEMPLATE_INTERNET if search_from_inet else CITATION_QA_TEMPLATE,
+                citation_refine_template=CITATION_REFINE_TEMPLATE_INTERNET if search_from_inet else CITATION_REFINE_TEMPLATE,
                 response_mode=ResponseMode.COMPACT
             )
             

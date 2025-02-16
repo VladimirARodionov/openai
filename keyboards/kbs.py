@@ -10,13 +10,12 @@ def main_kb(user_telegram_id: int):
         kb_list.append([KeyboardButton(text=i18n.format_value("add_user_menu")),
                         KeyboardButton(text=i18n.format_value("show_users_menu")),
                         KeyboardButton(text=i18n.format_value("delete_user_menu"))])
-        return ReplyKeyboardMarkup(
-            keyboard=kb_list,
-            resize_keyboard=True,
-            one_time_keyboard=True,
-            input_field_placeholder=i18n.format_value("use_menu"))
-    else:
-        return ReplyKeyboardRemove()
+    kb_list.append([KeyboardButton(text=i18n.format_value("toggle_inet_menu"))])
+    return ReplyKeyboardMarkup(
+        keyboard=kb_list,
+        resize_keyboard=True,
+        one_time_keyboard=True,
+        input_field_placeholder=i18n.format_value("use_menu"))
 
 def back_kb():
     kb_list = [[KeyboardButton(text=i18n.format_value("back_menu"))]]
