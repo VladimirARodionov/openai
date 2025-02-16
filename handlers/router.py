@@ -6,15 +6,17 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.types import Message
 
-from create_bot import env_config
 from filters.filter import IsAllowed, IsSuperUser
 from keyboards.kbs import back_kb, main_kb
 from locale_config import i18n
-from services.common import add_user, delete_user, list_users
+from services.common import add_user, delete_user, list_users, get_profile, toggle_inet, add_superusers
 from services.embedding import EmbeddingsSearch
 
 router = Router()
 logger = logging.getLogger(__name__)
+
+add_superusers()
+searcher = EmbeddingsSearch()
 
 class FSMAddUser(StatesGroup):
     wait_user = State()
@@ -36,13 +38,19 @@ async def cmd_stop(message: Message):
 
 @router.message(Command('profile'))
 async def cmd_profile(message: Message):
-    await message.answer(text=i18n.format_value("get_profile_text", {"username": message.from_user.username or 'Не указан', "id": str(message.from_user.id)}), reply_markup=main_kb(message.from_user.id))
+    await message.answer(text=get_profile(message.from_user), reply_markup=main_kb(message.from_user.id))
 
 
 @router.message(F.text.contains(i18n.format_value("back_menu_text")))
 async def cmd_back(message: Message, state: FSMContext):
     await state.clear()
     await message.answer(i18n.format_value("back_text"), reply_markup=main_kb(message.from_user.id))
+
+
+@router.message(F.text.endswith(i18n.format_value("toggle_inet_text")), IsAllowed())
+async def toggle_inet_user(message: Message):
+    res = toggle_inet(message.from_user.id)
+    await message.answer(res, reply_markup=main_kb(message.from_user.id))
 
 
 @router.message(F.text.endswith(i18n.format_value("show_users_text")), IsSuperUser())
@@ -90,13 +98,6 @@ async def process_delete_user(message: Message, state: FSMContext):
         await state.clear()
         await message.answer(i18n.format_value("not_success_delete_user_text"), reply_markup=main_kb(message.from_user.id))
 
-
-model=env_config.get('MODEL')
-
-searcher = EmbeddingsSearch(env_config.get('EMBEDDING_MODEL'),
-                            model,
-                            env_config.get('COUCHBASE_ADMINISTRATOR_USERNAME'),
-                            env_config.get('COUCHBASE_ADMINISTRATOR_PASSWORD'))
 
 @router.message(Command('load_from_dir'), IsSuperUser())
 async def load_from_dir(message: Message):

@@ -1,7 +1,7 @@
 import datetime
 
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy import Column, BIGINT, TIMESTAMP, MetaData, VARCHAR
+from sqlalchemy import Column, BIGINT, TIMESTAMP, MetaData, VARCHAR, BOOLEAN
 
 Base = declarative_base()
 
@@ -27,6 +27,7 @@ class User(Base):
     metadata = metadata
     id = Column(BIGINT, primary_key=True)
     name = Column(VARCHAR, nullable=True)
+    search_from_inet = Column(BOOLEAN, nullable=False, default=False)
     created_at = Column(TIMESTAMP(timezone=True), nullable=False, default=datetime.datetime.now())
     updated_at = Column(TIMESTAMP(timezone=True), nullable=False, default=datetime.datetime.now(), onupdate=datetime.datetime.now())
 

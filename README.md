@@ -3,7 +3,11 @@
 ## config
 add .env file as copy of .env.example file
 
+source venv/bin/activate
+
 pip install -r requirements.txt
+
+alembic upgrade head
 
 chmod -R +x init-scripts
 
