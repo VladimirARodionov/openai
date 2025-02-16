@@ -5,7 +5,7 @@ from pathlib import Path
 import openai
 import tiktoken
 from llama_cloud import MessageRole
-from llama_index.core import Settings, StorageContext, SimpleDirectoryReader, VectorStoreIndex, PromptTemplate, Document
+from llama_index.core import Settings, StorageContext, SimpleDirectoryReader, VectorStoreIndex, PromptTemplate, Document, SummaryIndex
 from llama_index.core.base.llms.types import ChatMessage
 from llama_index.core.node_parser import SimpleNodeParser
 from llama_index.core.query_engine import CitationQueryEngine
@@ -342,7 +342,6 @@ class EmbeddingsSearch:
                 ) for node in nodes
             ]
             
-            from llama_index.core import SummaryIndex
             summary_index = SummaryIndex.from_documents(documents)
             summary = summary_index.as_query_engine().query(
                 "Создай краткое саммари найденной информации в 2-3 предложения"
