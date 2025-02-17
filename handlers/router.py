@@ -123,6 +123,13 @@ async def chat_with_gpt(message, state: FSMContext):
     await state.set_state(FSMSelectResponseFormat.select_response_format)
     await message.reply(i18n.format_value("response_format_text"), reply_markup=get_inline_kb())
 
+@router.message(F.text, IsAllowed(), StateFilter(FSMSelectResponseFormat.select_response_format))
+async def chat_with_gpt_again(message, state: FSMContext):
+    await state.clear()
+    await state.update_data(name=message.text)
+    await state.set_state(FSMSelectResponseFormat.select_response_format)
+    await message.reply(i18n.format_value("response_format_text"), reply_markup=get_inline_kb())
+
 @router.callback_query(lambda c: c.data in ["simple_response", "detailed_report"])
 async def process_callback(callback_query: CallbackQuery, state: FSMContext):
     try:
