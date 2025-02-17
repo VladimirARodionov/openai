@@ -100,14 +100,16 @@ def list_users() -> str:
 
 
 def get_profile(user_from_msg):
-    text = i18n.format_value("get_profile_text", {"username": user_from_msg.username or 'Не указан', "id": str(user_from_msg.id)})
+    text = i18n.format_value("get_profile_text",
+                             {"username": user_from_msg.username or 'Не указан',
+                              "id": str(user_from_msg.id)})
     session = Session(db)
     try:
         user = session.get(User, user_from_msg.id)
         if not user:
             return text + "\n" + i18n.format_value("user_not_found")
         inet = i18n.format_value("toggle_inet_on") if user.search_from_inet else i18n.format_value("toggle_inet_off")
-        text = f"{text}\n {inet}"
+        text = f"{text}\n{inet}"
         return text
     except Exception:
         logger.exception('Ошибка при выводе списка пользователей')
