@@ -1,12 +1,14 @@
 import logging
+import asyncio
 
 from aiogram import Router, F
 from aiogram.filters import CommandStart, Command, StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import StatesGroup, State
-from aiogram.types import Message
+from aiogram.fsm.state import StatesGroup, State, default_state
+from aiogram.types import Message, CallbackQuery
 
 from filters.filter import IsAllowed, IsSuperUser
+from keyboards.inline_kb import get_inline_kb
 from keyboards.kbs import back_kb, main_kb
 from locale_config import i18n
 from services.common import add_user, delete_user, list_users, get_profile, toggle_inet, add_superusers
@@ -24,6 +26,10 @@ class FSMAddUser(StatesGroup):
 
 class FSMDeleteUser(StatesGroup):
     wait_user = State()
+
+
+class FSMSelectResponseFormat(StatesGroup):
+    select_response_format = State()
 
 
 # хендлер команды старт
@@ -111,8 +117,71 @@ async def clear_database(message: Message):
     await message.answer(response, reply_markup=main_kb(message.from_user.id))
 
 
-@router.message(F.text, IsAllowed())
-async def chat_with_gpt(message):
-    #response = ask_gpt(message.text)
-    response = searcher.ask(message.text, message.from_user.id, True)
-    await message.answer(response, reply_markup=main_kb(message.from_user.id))
+@router.message(F.text, IsAllowed(), StateFilter(default_state))
+async def chat_with_gpt(message, state: FSMContext):
+    await state.update_data(name=message.text)
+    await state.set_state(FSMSelectResponseFormat.select_response_format)
+    await message.reply(i18n.format_value("response_format_text"), reply_markup=get_inline_kb())
+
+@router.message(F.text, IsAllowed(), StateFilter(FSMSelectResponseFormat.select_response_format))
+async def chat_with_gpt_again(message, state: FSMContext):
+    await state.clear()
+    await state.update_data(name=message.text)
+    await state.set_state(FSMSelectResponseFormat.select_response_format)
+    await message.reply(i18n.format_value("response_format_text"), reply_markup=get_inline_kb())
+
+@router.callback_query(lambda c: c.data in ["simple_response", "detailed_report"])
+async def process_callback(callback_query: CallbackQuery, state: FSMContext):
+    try:
+        # Сначала отвечаем на callback, чтобы убрать "часики"
+        await callback_query.answer()
+        
+        data = await state.get_data()
+        await state.clear()
+        
+        if not "name" in data:
+            await callback_query.message.answer(i18n.format_value("no_name_text"))
+            return
+            
+        msg = data['name']
+        user_choice = callback_query.data
+        
+        # Отправляем сообщение о начале обработки
+        processing_msg = await callback_query.message.answer("⏳ Подготавливаю ответ...")
+        
+        try:
+            if user_choice == "simple_response":
+                response = searcher.ask(msg, callback_query.from_user.id, True)
+                # Отправляем простой ответ одним сообщением
+                await callback_query.message.answer(response)
+                
+            elif user_choice == "detailed_report":
+                response = searcher.report(msg, callback_query.from_user.id, True)
+                
+                # Разбиваем отчет на части по маркерам
+                parts = response.split("\n\n")
+                
+                # Отправляем каждую часть отдельным сообщением
+                for part in parts:
+                    if part.strip():  # Проверяем, что часть не пустая
+                        # Ограничиваем длину каждого сообщения
+                        if len(part) > 4000:
+                            # Если часть слишком длинная, разбиваем её на меньшие части
+                            for i in range(0, len(part), 4000):
+                                sub_part = part[i:i + 4000]
+                                await callback_query.message.answer(sub_part)
+                                await asyncio.sleep(0.5)  # Небольшая задержка между сообщениями
+                        else:
+                            await callback_query.message.answer(part)
+                            await asyncio.sleep(0.5)  # Небольшая задержка между сообщениями
+            
+            # Удаляем сообщение о подготовке ответа
+            await processing_msg.delete()
+            
+        except Exception as e:
+            logger.exception(f"Error processing request: {str(e)}")
+            await processing_msg.edit_text(f"Произошла ошибка при обработке запроса: {str(e)}")
+            
+    except Exception as e:
+        logger.exception(f"Error in callback handler: {str(e)}")
+        await callback_query.message.answer(f"Произошла ошибка: {str(e)}")

@@ -5,7 +5,7 @@ from pathlib import Path
 import openai
 import tiktoken
 from llama_cloud import MessageRole
-from llama_index.core import Settings, StorageContext, SimpleDirectoryReader, VectorStoreIndex, PromptTemplate
+from llama_index.core import Settings, StorageContext, SimpleDirectoryReader, VectorStoreIndex, PromptTemplate, Document, SummaryIndex
 from llama_index.core.base.llms.types import ChatMessage
 from llama_index.core.node_parser import SimpleNodeParser
 from llama_index.core.query_engine import CitationQueryEngine
@@ -17,11 +17,9 @@ from couchbase.cluster import Cluster
 from couchbase.options import ClusterOptions, ClusterTimeoutOptions
 from llama_index.llms.openai import OpenAI
 from llama_index.core.prompts import ChatPromptTemplate
-from sqlalchemy.orm import Session
 
-from create_bot import env_config, db
-from db.models.model import User
-from locale_config import i18n
+from create_bot import env_config
+from services.common import get_search_from_inet
 
 logger = logging.getLogger(__name__)
 
@@ -74,12 +72,56 @@ TEXT_QA_PROMPT_TMPL_MSGS = [
 CHAT_TEXT_QA_PROMPT = ChatPromptTemplate(message_templates=TEXT_QA_PROMPT_TMPL_MSGS)
 
 CITATION_QA_TEMPLATE = PromptTemplate(read_from_file("templates/citation_qa_template.txt"))
-print(CITATION_QA_TEMPLATE)
 CITATION_REFINE_TEMPLATE = PromptTemplate(read_from_file("templates/citation_refine_template.txt"))
 
 CITATION_QA_TEMPLATE_INTERNET = PromptTemplate(read_from_file("templates/citation_qa_template_internet.txt"))
 
 CITATION_REFINE_TEMPLATE_INTERNET = PromptTemplate(read_from_file("templates/citation_refine_template_internet.txt"))
+
+INTERNET_QA_TEMPLATE = PromptTemplate(read_from_file("templates/internet_qa_template.txt"))
+INTERNET_REPORT_TEMPLATE = PromptTemplate(read_from_file("templates/internet_report_template.txt"))
+
+def _create_query_engine(index, top_k:int = 20):
+    query_engine = CitationQueryEngine.from_args(
+        index,
+        citation_chunk_size=1024,
+        similarity_top_k=top_k or env_config.get('SIMILARITY_TOP_K', 10),
+        citation_qa_template=CITATION_QA_TEMPLATE,
+        citation_refine_template=CITATION_REFINE_TEMPLATE,
+        response_mode=ResponseMode.COMPACT
+    )
+    return query_engine
+
+
+def _extract_topics(text: str) -> list[str]:
+    """Извлечение основных тем из текста
+
+    Args:
+        text (str): Анализируемый текст
+
+    Returns:
+        list[str]: Список основных тем
+    """
+    try:
+        # Создаем промпт для выделения тем
+        prompt = PromptTemplate(
+            "Проанализируй следующий текст и выдели 3-5 основных тем или ключевых понятий:\n"
+            "{text}\n"
+            "Темы:"
+        )
+
+        # Используем GPT для анализа
+        response = Settings.llm.complete(prompt.format(text=text[:1000]))  # Ограничиваем длину текста
+
+        # Разбираем ответ
+        topics = [topic.strip().lower() for topic in str(response).split('\n') if topic.strip()]
+
+        return topics
+
+    except Exception as e:
+        logger.warning(f"Ошибка при извлечении тем: {str(e)}")
+        return []
+
 
 class EmbeddingsSearch:
     def __init__(self):
@@ -252,46 +294,110 @@ class EmbeddingsSearch:
 
     def ask(self, query, user_id, print_message=False):
         """Ответ на вопрос с использованием GPT и релевантных текстов"""
-        search_from_inet = False
-        session = Session(db)
         try:
-            user = session.get(User, user_id)
-            if not user:
-                return i18n.format_value("user_not_found")
-            search_from_inet = user.search_from_inet
-        except Exception:
-            logger.exception('Ошибка при проверке режима поиска из интернета')
-            session.rollback()
-        finally:
-            session.close()
-        try:
-            # Создаем индекс для поиска
-            index = VectorStoreIndex.from_vector_store(
-                self.vector_store
-            )
+            search_from_inet = get_search_from_inet(user_id)
+            response_parts = []
             
-            # Создаем движок для запросов с нашим промптом
-            query_engine = CitationQueryEngine.from_args(
-                index,
-                citation_chunk_size=1024,
-                similarity_top_k=env_config.get('SIMILARITY_TOP_K', 10),
-                citation_qa_template=CITATION_QA_TEMPLATE_INTERNET if search_from_inet else CITATION_QA_TEMPLATE,
-                citation_refine_template=CITATION_REFINE_TEMPLATE_INTERNET if search_from_inet else CITATION_REFINE_TEMPLATE,
-                response_mode=ResponseMode.COMPACT
-            )
+            # 1. Поиск в локальных документах
+            index = VectorStoreIndex.from_vector_store(self.vector_store)
+            query_engine = _create_query_engine(index)
+            local_response = query_engine.query(query)
+            response_parts.append(str(local_response))
             
-            # Получаем ответ
-            response = query_engine.query(query)
+            # 2. Поиск в интернете через GPT, если включен
+            if search_from_inet:
+                try:
+                    # Используем шаблон для поиска в интернете
+                    internet_response = Settings.llm.complete(
+                        INTERNET_QA_TEMPLATE.format(
+                            query_str=query,
+                            local_response=str(local_response)
+                        )
+                    )
+                    
+                    if str(internet_response).strip():
+                        response_parts.append("\n\n🌐 Дополнительная информация из интернета:\n" + str(internet_response))
+                
+                except Exception as e:
+                    logger.warning(f"Ошибка при поиске в интернете: {str(e)}")
+                    response_parts.append("\n⚠️ Не удалось получить информацию из интернета")
             
             if print_message:
                 logger.info(f"Query: {query}")
-                logger.info(f"Response: {response}")
+                logger.info(f"Response: {response_parts}")
             
-            return str(response)
+            return "\n".join(response_parts)
             
         except Exception as e:
             logger.exception(str(e))
             return f"Произошла ошибка: {str(e)}"
+
+    def report(self, query: str, user_id, print_message=False):
+        """Формирование детального отчета по запросу"""
+        try:
+            search_from_inet = get_search_from_inet(user_id)
+            report_parts = []
+            
+            # Создаем индекс для поиска в локальных документах
+            index = VectorStoreIndex.from_vector_store(self.vector_store)
+            
+            # Получаем релевантные ноды с метаданными
+            retriever = index.as_retriever(similarity_top_k=10)
+            nodes = retriever.retrieve(query)
+            
+            # 1. Основной ответ из локальных документов
+            query_engine = _create_query_engine(index)
+            main_response = query_engine.query(query)
+            report_parts.append(f"🔍 Основной ответ из документов:\n\n{str(main_response)}\n")
+            
+            # 2. Краткое саммари локальных документов
+            if nodes:
+                documents = [
+                    Document(
+                        text=node.text,
+                        metadata=node.metadata
+                    ) for node in nodes
+                ]
+                
+                summary_index = SummaryIndex.from_documents(documents)
+                summary = summary_index.as_query_engine().query(
+                    "Создай краткое саммари найденной информации в 2-3 предложения"
+                )
+                report_parts.append(f"\n📝 Краткое саммари локальных документов:\n{str(summary)}\n")
+            
+            # 3. Поиск в интернете через GPT, если включен
+            if search_from_inet:
+                try:
+                    # Используем шаблон для детального отчета
+                    internet_response = Settings.llm.complete(
+                        INTERNET_REPORT_TEMPLATE.format(
+                            query_str=query,
+                            local_response=str(main_response)
+                        )
+                    )
+                    
+                    if str(internet_response).strip():
+                        report_parts.append("\n🌐 Информация из интернета:\n" + str(internet_response))
+                
+                except Exception as e:
+                    logger.warning(f"Ошибка при поиске в интернете: {str(e)}")
+                    report_parts.append("\n⚠️ Не удалось получить информацию из интернета")
+            
+            # 4. Источники информации из локальных документов
+            sources = {}
+            for node in nodes:
+                source = node.metadata.get('source', 'Unknown')
+                sources[source] = sources.get(source, 0) + 1
+            
+            report_parts.append("\n📚 Основные локальные источники:")
+            for source, count in sorted(sources.items(), key=lambda x: x[1], reverse=True)[:5]:
+                report_parts.append(f"- {source}: {count} релевантных фрагментов")
+            
+            return "\n".join(report_parts)
+            
+        except Exception as e:
+            logger.exception(str(e))
+            return f"Произошла ошибка при формировании отчета: {str(e)}"
 
     def clear_database(self):
         """Очистка базы данных"""
