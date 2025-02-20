@@ -1,23 +1,41 @@
 version: '3.8'
 services:
   couchbase:
-    container_name: couchbase
     image: couchbase/server:7.6.5
     ports:
-      - "8091-8096:8091-8096"
-      - "11210:11210"
-      - "18091:18091"
+      - "${COUCHBASE_HTTP_PORT}:8091"
     volumes:
       - couchbase_data:/opt/couchbase/var
       - ./init-scripts:/docker-entrypoint-initdb.d
       - couchbase_init:/opt/couchbase/init_done
       - ./backups:/opt/couchbase/backup
+    restart: always
     env_file:
       - .env
     environment:
       - COUCHBASE_BUCKET=vector_store
       - COUCHBASE_BUCKET_RAMSIZE=512
+      - TZ=${TZ}
     command: sh -c "/docker-entrypoint-initdb.d/init.sh & /entrypoint.sh couchbase-server"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:8091"]
+      interval: 30s
+      timeout: 30s
+      retries: 5
+  openaiapp :
+    build:
+      dockerfile: Dockerfile_app
+    env_file:
+      - .env
+    environment:
+      - TZ=${TZ}
+    volumes:
+      - ./logs:/app/logs
+      - ./load:/app/load
+    restart: always
+    depends_on:
+      couchbase:
+        condition: service_healthy
 
 volumes:
   couchbase_data:

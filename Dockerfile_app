@@ -1,0 +1,24 @@
+# Use an official Python runtime as the base image
+FROM python:3.13-slim-bullseye
+
+# Install apt packages
+RUN apt-get update
+RUN apt-get install --no-install-recommends -y build-essential
+
+ENV ENVIRONMENT=PRODUCTION
+# Copy the requirements file into the container
+COPY requirements.txt .
+
+# Install the dependencies
+RUN pip install -r requirements.txt
+
+RUN addgroup --system app
+RUN adduser --system app --ingroup app
+USER app:app
+WORKDIR app
+# Copy the rest of the application's source code into the container
+COPY --chown=app:app . .
+RUN alembic upgrade head
+# Set the command to run the application
+#RUN alembic upgrade head
+CMD ["python", "bot.py"]

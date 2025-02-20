@@ -7,6 +7,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State, default_state
 from aiogram.types import Message, CallbackQuery
 
+from create_bot import START_MENU_TEXT
 from filters.filter import IsAllowed, IsSuperUser
 from keyboards.inline_kb import get_inline_kb
 from keyboards.kbs import back_kb, main_kb
@@ -35,7 +36,7 @@ class FSMSelectResponseFormat(StatesGroup):
 # хендлер команды старт
 @router.message(CommandStart())
 async def cmd_start(message: Message):
-    await message.answer(text=i18n.format_value("start_menu_text"), reply_markup=main_kb(message.from_user.id))
+    await message.answer(START_MENU_TEXT, reply_markup=main_kb(message.from_user.id))
 
 
 @router.message(Command('stop'))

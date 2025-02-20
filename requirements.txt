@@ -12,7 +12,7 @@ llama-index
 llama-index-vector-stores-couchbase
 couchbase
 # Для работы с различными форматами файлов
-unstructured[all-docs]
+#unstructured[all-docs]
 pytesseract
 python-magic
 python-pptx
@@ -20,9 +20,9 @@ beautifulsoup4
 markdown
 pdfminer.six
 # Для работы с аудио
-openai-whisper
+#openai-whisper
 # Для работы с изображениями
-pillow
-transformers
-torch
+#pillow
+#transformers
+#torch
 

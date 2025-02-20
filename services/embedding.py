@@ -244,9 +244,9 @@ class EmbeddingsSearch:
                     ".txt", ".md", ".json", ".csv", ".html", ".xml",
                     ".pdf", ".doc", ".docx", ".ppt", ".pptx",
                     # Аудио форматы
-                    ".mp3", ".mp4", ".mpeg", ".mpga", ".m4a", ".wav", ".webm",
+                    #".mp3", ".mp4", ".mpeg", ".mpga", ".m4a", ".wav", ".webm",
                     # Форматы изображений
-                    ".jpg", ".jpeg", ".png", ".gif", ".webp",
+                    #".jpg", ".jpeg", ".png", ".gif", ".webp",
                     # Форматы кода
                     ".py", ".js", ".java", ".cpp", ".h", ".c", ".cs", ".php", ".rb", ".swift", ".go"
                 ],
