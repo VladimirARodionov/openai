@@ -11,7 +11,11 @@ alembic upgrade head
 
 chmod -R +x init-scripts
 
-sudo docker compose up -d
+chmod -R a+rw logs
+
+sudo docker compose -p ay build --no-cache
+
+sudo docker compose -p ay up --build -d
 
 python bot.py
 
