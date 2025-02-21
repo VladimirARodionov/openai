@@ -1,4 +1,5 @@
 import logging
+import time
 from datetime import timedelta
 from pathlib import Path
 
@@ -430,7 +431,9 @@ class EmbeddingsSearch:
                     logger.error(f"Error deleting document {row['id']}: {str(e)}")
             
             logger.info(f"Deleted {deleted_count} documents")
-            
+
+            time.sleep(3)
+
             # Проверяем, что документы удалены
             result = self.cluster.query(count_query).rows()
             final_count = next(result)['count']
