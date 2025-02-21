@@ -2,6 +2,9 @@ import logging
 import time
 from datetime import timedelta
 from pathlib import Path
+from multiprocessing import Process, Event
+import telegram
+from datetime import datetime
 
 import openai
 import tiktoken
@@ -200,6 +203,10 @@ class EmbeddingsSearch:
         )
         self.node_parser = SimpleNodeParser.from_defaults()
 
+        self.bot = telegram.Bot(token=env_config.get('TELEGRAM_BOT_TOKEN'))
+        self.loading_process = None
+        self.stop_loading = Event()
+
     def num_tokens(self, text):
         """Подсчет токенов в тексте"""
         encoding = tiktoken.encoding_for_model(self.GPT_MODEL)
@@ -219,37 +226,110 @@ class EmbeddingsSearch:
         
         return paragraphs
 
-    def load_documents_from_directory(self, directory_path):
-        """Загрузка документов из директории, создание индекса и сохранение в Couchbase
-        
-        Поддерживаемые форматы:
-        - Текстовые: .txt, .md, .json, .csv, .html, .xml, .pdf, .doc, .docx, .ppt, .pptx
-        - Аудио: .mp3, .mp4, .mpeg, .mpga, .m4a, .wav, .webm
-        - Изображения: .jpg, .jpeg, .png, .gif, .webp
-        - Код: .py, .js, .java, .cpp, .h, .c, .cs, .php, .rb, .swift, .go
-        
-        Args:
-            directory_path (str): Путь к директории с документами
-        """
+    def _send_status_message(self, chat_id):
+        """Отправка статуса загрузки в Telegram"""
+        while not self.stop_loading.is_set():
+            try:
+                # Подсчет документов в базе
+                count_query = f"SELECT COUNT(*) as count FROM `{self.vector_store._bucket_name}`.`{self.vector_store._scope_name}`.`{self.vector_store._collection_name}`"
+                result = self.cluster.query(count_query).rows()
+                doc_count = next(result)['count']
+                
+                message = f"📊 Статус загрузки документов:\nВсего документов в системе: {doc_count}\nВремя: {datetime.now().strftime('%H:%M:%S')}"
+                self.bot.send_message(chat_id=chat_id, text=message)
+                
+                # Ждем 10 минут перед следующим обновлением
+                for _ in range(600):  # 10 минут = 600 секунд
+                    if self.stop_loading.is_set():
+                        break
+                    time.sleep(1)
+                    
+            except Exception as e:
+                logger.error(f"Ошибка при отправке статуса: {str(e)}")
+                time.sleep(60)  # Подождем минуту при ошибке
+
+    def _load_documents_process(self, directory_path, chat_id):
+        """Процесс для загрузки документов"""
         try:
-            # Отключаем логирование OpenAI запросов
+            # Создаем новое подключение к базе данных для процесса
+            cluster = Cluster.connect(
+                f"couchbase://{env_config.get('COUCHBASE_HOST')}",
+                ClusterOptions(
+                    PasswordAuthenticator(
+                        env_config.get('COUCHBASE_ADMINISTRATOR_USERNAME'),
+                        env_config.get('COUCHBASE_ADMINISTRATOR_PASSWORD')
+                    ),
+                    timeout_options=ClusterTimeoutOptions(
+                        kv_timeout=timedelta(seconds=120),
+                        query_timeout=timedelta(seconds=120),
+                        search_timeout=timedelta(seconds=120)
+                    )
+                )
+            )
+            
+            # Создаем новый экземпляр vector_store для процесса
+            vector_store = CouchbaseVectorStore(
+                cluster=cluster,
+                bucket_name="vector_store",
+                scope_name="_default",
+                collection_name="_default",
+                index_name="vector-index"
+            )
+            
+            # Создаем новый storage_context
+            storage_context = StorageContext.from_defaults(
+                vector_store=vector_store
+            )
+            
+            result = self._load_documents_impl(directory_path, storage_context)
+            # Отправляем финальное сообщение
+            self.bot.send_message(chat_id=chat_id, text=f"✅ Загрузка завершена!\n{result}")
+        except Exception as e:
+            error_msg = f"❌ Ошибка при загрузке документов: {str(e)}"
+            logger.exception(error_msg)
+            self.bot.send_message(chat_id=chat_id, text=error_msg)
+        finally:
+            self.stop_loading.set()
+            self.loading_process = None
+
+    def load_documents_from_directory(self, directory_path, chat_id):
+        """Асинхронная загрузка документов из директории"""
+        if self.loading_process and self.loading_process.is_alive():
+            return "Загрузка документов уже выполняется"
+
+        self.stop_loading.clear()
+        
+        # Запускаем процесс для отправки статуса
+        status_process = Process(
+            target=self._send_status_message,
+            args=(chat_id,)
+        )
+        status_process.daemon = True
+        status_process.start()
+        
+        # Запускаем процесс для загрузки документов
+        self.loading_process = Process(
+            target=self._load_documents_process,
+            args=(directory_path, chat_id)
+        )
+        self.loading_process.daemon = True
+        self.loading_process.start()
+        
+        return "Загрузка документов начата в фоновом режиме"
+
+    def _load_documents_impl(self, directory_path, storage_context=None):
+        """Реализация загрузки документов"""
+        try:
             openai.OpenAI._disable_logging = True
             logger.info("Начинаем загрузку документов")
 
-            # Используем SimpleDirectoryReader для загрузки всех поддерживаемых файлов
             documents = SimpleDirectoryReader(
                 input_dir=directory_path,
                 recursive=True,
                 filename_as_id=True,
                 required_exts=[
-                    # Текстовые форматы
                     ".txt", ".md", ".json", ".csv", ".html", ".xml",
                     ".pdf", ".doc", ".docx", ".ppt", ".pptx",
-                    # Аудио форматы
-                    #".mp3", ".mp4", ".mpeg", ".mpga", ".m4a", ".wav", ".webm",
-                    # Форматы изображений
-                    #".jpg", ".jpeg", ".png", ".gif", ".webp",
-                    # Форматы кода
                     ".py", ".js", ".java", ".cpp", ".h", ".c", ".cs", ".php", ".rb", ".swift", ".go"
                 ],
                 exclude_hidden=True
@@ -274,27 +354,22 @@ class EmbeddingsSearch:
                 logger.info("Создаем индекс из документов целиком")
                 index = VectorStoreIndex.from_documents(
                     documents,
-                    storage_context=self.storage_context,
+                    storage_context=storage_context or self.storage_context,
                     show_progress=True
                 )
 
                 file_count = len(documents)
                 logger.info(f"Обработано файлов: {file_count}")
                 
-                # Включаем логирование обратно
-                openai.OpenAI._disable_logging = False
-                
                 return f"Загружено {file_count} файлов"
             else:
-                # Включаем логирование обратно
-                openai.OpenAI._disable_logging = False
                 return "Не найдено поддерживаемых файлов в указанной директории"
             
         except Exception as e:
-            # Включаем логирование обратно даже в случае ошибки
-            openai.OpenAI._disable_logging = False
             logger.exception(f"Ошибка при загрузке документов: {str(e)}")
-            return f"Произошла ошибка при загрузке документов: {str(e)}"
+            raise
+        finally:
+            openai.OpenAI._disable_logging = False
 
     def ask(self, query, user_id, print_message=False):
         """Ответ на вопрос с использованием GPT и релевантных текстов"""
