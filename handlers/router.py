@@ -131,6 +131,25 @@ async def chat_with_gpt_again(message, state: FSMContext):
     await state.set_state(FSMSelectResponseFormat.select_response_format)
     await message.reply(i18n.format_value("response_format_text"), reply_markup=get_inline_kb())
 
+async def print_parts(response:str, callback_query: CallbackQuery):
+    # Разбиваем отчет на части по маркерам
+    parts = response.split("\n\n")
+
+    # Отправляем каждую часть отдельным сообщением
+    for part in parts:
+        if part.strip():  # Проверяем, что часть не пустая
+            # Ограничиваем длину каждого сообщения
+            if len(part) > 4000:
+                # Если часть слишком длинная, разбиваем её на меньшие части
+                for i in range(0, len(part), 4000):
+                    sub_part = part[i:i + 4000]
+                    await callback_query.message.answer(sub_part)
+                    await asyncio.sleep(0.5)  # Небольшая задержка между сообщениями
+            else:
+                await callback_query.message.answer(part)
+                await asyncio.sleep(0.5)  # Небольшая задержка между сообщениями
+
+
 @router.callback_query(lambda c: c.data in ["simple_response", "detailed_report"])
 async def process_callback(callback_query: CallbackQuery, state: FSMContext):
     try:
@@ -153,28 +172,10 @@ async def process_callback(callback_query: CallbackQuery, state: FSMContext):
         try:
             if user_choice == "simple_response":
                 response = searcher.ask(msg, callback_query.from_user.id, True)
-                # Отправляем простой ответ одним сообщением
-                await callback_query.message.answer(response)
-                
+                await print_parts(response, callback_query)
             elif user_choice == "detailed_report":
                 response = searcher.report(msg, callback_query.from_user.id, True)
-                
-                # Разбиваем отчет на части по маркерам
-                parts = response.split("\n\n")
-                
-                # Отправляем каждую часть отдельным сообщением
-                for part in parts:
-                    if part.strip():  # Проверяем, что часть не пустая
-                        # Ограничиваем длину каждого сообщения
-                        if len(part) > 4000:
-                            # Если часть слишком длинная, разбиваем её на меньшие части
-                            for i in range(0, len(part), 4000):
-                                sub_part = part[i:i + 4000]
-                                await callback_query.message.answer(sub_part)
-                                await asyncio.sleep(0.5)  # Небольшая задержка между сообщениями
-                        else:
-                            await callback_query.message.answer(part)
-                            await asyncio.sleep(0.5)  # Небольшая задержка между сообщениями
+                await print_parts(response, callback_query)
             
             # Удаляем сообщение о подготовке ответа
             await processing_msg.delete()
