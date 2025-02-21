@@ -139,7 +139,7 @@ class EmbeddingsSearch:
         Settings.llm = OpenAI(
             model=self.GPT_MODEL,
             api_key=openai_api_key,
-            max_retries=2,
+            max_retries=3,
             timeout=30,
             request_timeout=30
         )
