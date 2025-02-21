@@ -233,7 +233,8 @@ class EmbeddingsSearch:
         try:
             # Отключаем логирование OpenAI запросов
             openai.OpenAI._disable_logging = True
-            
+            logger.info("Начинаем загрузку документов")
+
             # Используем SimpleDirectoryReader для загрузки всех поддерживаемых файлов
             documents = SimpleDirectoryReader(
                 input_dir=directory_path,
@@ -255,6 +256,7 @@ class EmbeddingsSearch:
 
             if documents:
                 # Обновляем метаданные документов
+                logger.info("Обновляем метаданные документов")
                 for doc in documents:
                     file_path = Path(doc.metadata.get('file_path', ''))
                     if file_path:
@@ -268,6 +270,7 @@ class EmbeddingsSearch:
                         })
 
                 # Создаем индекс из документов целиком
+                logger.info("Создаем индекс из документов целиком")
                 index = VectorStoreIndex.from_documents(
                     documents,
                     storage_context=self.storage_context,

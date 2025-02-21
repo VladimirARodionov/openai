@@ -32,6 +32,7 @@ services:
     volumes:
       - ./logs:/app/logs
       - ./load:/app/load
+      - ./templates:/app/templates
     restart: always
     depends_on:
       couchbase:
