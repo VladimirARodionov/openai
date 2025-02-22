@@ -31,7 +31,9 @@ logging.config.fileConfig(fname=pathlib.Path(__file__).resolve().parent / 'loggi
                           disable_existing_loggers=False)
 logging.getLogger('aiogram.dispatcher').propagate = False
 logging.getLogger('aiogram.event').propagate = False
-db_string = 'sqlite:///local.db'
+BASE_DIR = os.path.dirname(os.path.abspath(__file__)) + "/appdb/"
+os.path.join(BASE_DIR, 'local.db')
+db_string = 'sqlite:///' + os.path.join(BASE_DIR, 'local.db')
 db = sqlalchemy.create_engine(
     db_string,
     **(

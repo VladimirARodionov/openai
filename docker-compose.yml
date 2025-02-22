@@ -33,6 +33,7 @@ services:
       - ./logs:/app/logs
       - ./load:/app/load
       - ./templates:/app/templates
+      - appdb_data:/app/appdb
     restart: always
     depends_on:
       couchbase:
@@ -41,3 +42,4 @@ services:
 volumes:
   couchbase_data:
   couchbase_init:
+  appdb_data:
