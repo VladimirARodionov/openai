@@ -18,6 +18,7 @@ USER app:app
 WORKDIR app
 # Copy the rest of the application's source code into the container
 COPY --chown=app:app . .
+RUN mkdir -p /app/appdb
 RUN alembic upgrade head
 # Set the command to run the application
 #RUN alembic upgrade head
