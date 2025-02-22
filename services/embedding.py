@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import time
-from datetime import timedelta
+from datetime import timedelta, datetime
 from pathlib import Path
 from multiprocessing import Process, Event
 
@@ -25,6 +25,7 @@ from llama_index.llms.openai import OpenAI
 from llama_index.core.prompts import ChatPromptTemplate
 
 from create_bot import env_config
+from locale_config import i18n
 from services.common import get_search_from_inet
 
 logger = logging.getLogger(__name__)
@@ -239,12 +240,15 @@ class EmbeddingsSearch:
         """Отправка статуса загрузки в Telegram"""
         while not self.stop_loading.is_set():
             try:
-                # Подсчет документов в базе
                 count_query = f"SELECT COUNT(*) as count FROM `{self.vector_store._bucket_name}`.`{self.vector_store._scope_name}`.`{self.vector_store._collection_name}`"
                 result = self.cluster.query(count_query).rows()
                 doc_count = next(result)['count']
                 
-                message = f"📊 Статус загрузки документов:\nВсего частей документов в системе: {doc_count}"
+                message = (
+                    i18n.format_value('loading_status') + '\n' +
+                    i18n.format_value('loading_total_docs', {'count': doc_count}) + '\n' +
+                    i18n.format_value('loading_time', {'time': datetime.now().strftime('%H:%M:%S')})
+                )
                 await bot.send_message(chat_id=chat_id, text=message)
                 
                 # Ждем 5 минут перед следующим обновлением
@@ -276,10 +280,12 @@ class EmbeddingsSearch:
             )
             
             result = self._load_documents_impl(directory_path, storage_context)
-            # Отправляем финальное сообщение
-            await bot.send_message(chat_id=chat_id, text=f"✅ Загрузка завершена!\n{result}")
+            await bot.send_message(
+                chat_id=chat_id,
+                text=i18n.format_value('loading_complete') + '\n' + result
+            )
         except Exception as e:
-            error_msg = f"❌ Ошибка при загрузке документов: {str(e)}"
+            error_msg = i18n.format_value('loading_error', {'error': str(e)})
             logger.exception(error_msg)
             await bot.send_message(chat_id=chat_id, text=error_msg)
         finally:
@@ -289,7 +295,7 @@ class EmbeddingsSearch:
     def load_documents_from_directory(self, directory_path, chat_id):
         """Асинхронная загрузка документов из директории"""
         if self.loading_process and self.loading_process.is_alive():
-            return "Загрузка документов уже выполняется"
+            return i18n.format_value('loading_already_running')
 
         self.stop_loading.clear()
         
@@ -309,7 +315,7 @@ class EmbeddingsSearch:
         )
         self.loading_process.start()
         
-        return "Загрузка документов начата в фоновом режиме"
+        return i18n.format_value('loading_started')
 
     def _load_documents_impl(self, directory_path, storage_context=None):
         """Реализация загрузки документов"""
@@ -355,9 +361,9 @@ class EmbeddingsSearch:
                 file_count = len(documents)
                 logger.info(f"Обработано файлов: {file_count}")
                 
-                return f"Загружено {file_count} файлов"
+                return i18n.format_value('loading_files_count', {'count': file_count})
             else:
-                return "Не найдено поддерживаемых файлов в указанной директории"
+                return i18n.format_value('loading_no_files')
             
         except Exception as e:
             logger.exception(f"Ошибка при загрузке документов: {str(e)}")
@@ -389,11 +395,11 @@ class EmbeddingsSearch:
                     )
                     
                     if str(internet_response).strip():
-                        response_parts.append("\n\n🌐 Дополнительная информация из интернета:\n" + str(internet_response))
+                        response_parts.append(i18n.format_value('search_internet_title') + str(internet_response))
                 
                 except Exception as e:
                     logger.exception(f"Ошибка при поиске в интернете: {str(e)}")
-                    response_parts.append("\n⚠️ Не удалось получить информацию из интернета")
+                    response_parts.append(i18n.format_value('search_internet_error'))
             
             if print_message:
                 logger.info(f"Query: {query}")
@@ -403,7 +409,7 @@ class EmbeddingsSearch:
             
         except Exception as e:
             logger.exception(str(e))
-            return f"Произошла ошибка: {str(e)}"
+            return i18n.format_value('search_error', {'error': str(e)})
 
     def report(self, query: str, user_id, print_message=False):
         """Формирование детального отчета по запросу"""
@@ -421,7 +427,7 @@ class EmbeddingsSearch:
             # 1. Основной ответ из локальных документов
             query_engine = _create_query_engine(index)
             main_response = query_engine.query(query)
-            report_parts.append(f"🔍 Основной ответ из документов:\n\n{str(main_response)}\n")
+            report_parts.append(i18n.format_value('search_local_title') + '\n' + str(main_response) + '\n')
             
             # 2. Краткое саммари локальных документов
             if nodes:
@@ -436,7 +442,7 @@ class EmbeddingsSearch:
                 summary = summary_index.as_query_engine().query(
                     "Создай краткое саммари найденной информации в 2-3 предложения"
                 )
-                report_parts.append(f"\n📝 Краткое саммари локальных документов:\n{str(summary)}\n")
+                report_parts.append(i18n.format_value('search_summary_title') + str(summary) + '\n')
             
             # 3. Поиск в интернете через GPT, если включен
             if search_from_inet:
@@ -450,11 +456,11 @@ class EmbeddingsSearch:
                     )
                     
                     if str(internet_response).strip():
-                        report_parts.append("\n🌐 Информация из интернета:\n" + str(internet_response))
+                        report_parts.append(i18n.format_value('search_internet_title') + str(internet_response))
                 
                 except Exception as e:
                     logger.exception(f"Ошибка при поиске в интернете: {str(e)}")
-                    report_parts.append("\n⚠️ Не удалось получить информацию из интернета")
+                    report_parts.append(i18n.format_value('search_internet_error'))
             
             # 4. Источники информации из локальных документов
             sources = {}
@@ -462,15 +468,18 @@ class EmbeddingsSearch:
                 source = node.metadata.get('source', 'Unknown')
                 sources[source] = sources.get(source, 0) + 1
             
-            report_parts.append("\n📚 Основные локальные источники:")
+            report_parts.append(i18n.format_value('search_sources_title'))
             for source, count in sorted(sources.items(), key=lambda x: x[1], reverse=True)[:5]:
-                report_parts.append(f"- {source}: {count} релевантных фрагментов")
+                report_parts.append(i18n.format_value('search_source_count', {
+                    'source': source,
+                    'count': count
+                }))
             
             return "\n".join(report_parts)
             
         except Exception as e:
             logger.exception(str(e))
-            return f"Произошла ошибка при формировании отчета: {str(e)}"
+            return i18n.format_value('search_report_error', {'error': str(e)})
 
     def clear_database(self):
         """Очистка базы данных"""
@@ -510,13 +519,13 @@ class EmbeddingsSearch:
             
             if final_count == 0:
                 logger.info("База данных успешно очищена")
-                return "База данных очищена"
+                return i18n.format_value('db_cleared')
             else:
-                error_msg = f"Не все документы были удалены. Осталось: {final_count}"
+                error_msg = i18n.format_value('db_clear_partial', {'count': final_count})
                 logger.error(error_msg)
                 return error_msg
             
         except Exception as e:
-            error_msg = f"Ошибка при очистке базы данных: {str(e)}"
+            error_msg = i18n.format_value('db_clear_error', {'error': str(e)})
             logger.exception(error_msg)
             return error_msg
