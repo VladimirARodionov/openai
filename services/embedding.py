@@ -1,13 +1,15 @@
+import asyncio
 import logging
 import time
 from datetime import timedelta
 from pathlib import Path
 from multiprocessing import Process, Event
-import telegram
-from datetime import datetime
 
 import openai
 import tiktoken
+from aiogram import Bot
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
 from llama_cloud import MessageRole
 from llama_index.core import Settings, StorageContext, SimpleDirectoryReader, VectorStoreIndex, PromptTemplate, Document, SummaryIndex
 from llama_index.core.base.llms.types import ChatMessage
@@ -126,6 +128,32 @@ def _extract_topics(text: str) -> list[str]:
         logger.warning(f"Ошибка при извлечении тем: {str(e)}")
         return []
 
+def _get_cluster():
+    couchbase_host = env_config.get('COUCHBASE_HOST')
+    connection_string = f"couchbase://{couchbase_host}"
+    cluster = Cluster.connect(
+    connection_string,
+    ClusterOptions(PasswordAuthenticator(env_config.get('COUCHBASE_ADMINISTRATOR_USERNAME'),
+                                         env_config.get('COUCHBASE_ADMINISTRATOR_PASSWORD')),
+                   timeout_options=ClusterTimeoutOptions(
+                       kv_timeout=timedelta(seconds=120),
+                       query_timeout=timedelta(seconds=120),
+                       search_timeout=timedelta(seconds=120)
+                   ))
+    )
+    return cluster
+
+def _get_vector_store(cluster):
+    vector_store = CouchbaseVectorStore(
+        cluster=cluster,
+        bucket_name="vector_store",
+        scope_name="_default",
+        collection_name="_default",
+        index_name="vector-index"
+    )
+    logger.info("Vector store initialized successfully")
+    return vector_store
+
 
 class EmbeddingsSearch:
     def __init__(self):
@@ -154,21 +182,7 @@ class EmbeddingsSearch:
             request_timeout=30
         )
 
-        # Получаем параметры подключения из переменных окружения
-        couchbase_host = env_config.get('COUCHBASE_HOST')
-
-        # Используем connection string с указанием всех необходимых портов
-        connection_string = f"couchbase://{couchbase_host}"
-        self.cluster = Cluster.connect(
-            connection_string,
-            ClusterOptions(PasswordAuthenticator(env_config.get('COUCHBASE_ADMINISTRATOR_USERNAME'),
-                                                 env_config.get('COUCHBASE_ADMINISTRATOR_PASSWORD')),
-                           timeout_options=ClusterTimeoutOptions(
-                               kv_timeout=timedelta(seconds=120),
-                               query_timeout=timedelta(seconds=120),
-                               search_timeout=timedelta(seconds=120)
-                           ))
-        )
+        self.cluster = _get_cluster()
         
         try:
             # Проверяем доступные индексы
@@ -184,15 +198,7 @@ class EmbeddingsSearch:
             logger.info(f"Available GSI indexes in _default scope: {gsi_indexes}")
             
             # Создаем векторное хранилище
-            self.vector_store = CouchbaseVectorStore(
-                cluster=self.cluster,
-                bucket_name="vector_store",
-                scope_name="_default",
-                collection_name="_default",
-                index_name="vector-index"
-            )
-            logger.info("Vector store initialized successfully")
-            
+            self.vector_store = _get_vector_store(self.cluster)
         except Exception as e:
             logger.error(f"Error initializing vector store: {str(e)}")
             raise
@@ -203,7 +209,6 @@ class EmbeddingsSearch:
         )
         self.node_parser = SimpleNodeParser.from_defaults()
 
-        self.bot = telegram.Bot(token=env_config.get('TELEGRAM_BOT_TOKEN'))
         self.loading_process = None
         self.stop_loading = Event()
 
@@ -226,7 +231,11 @@ class EmbeddingsSearch:
         
         return paragraphs
 
-    def _send_status_message(self, chat_id):
+    def _send_status_message_run(self, chat_id):
+        asyncio.run(self._send_status_message(chat_id))
+
+    async def _send_status_message(self, chat_id):
+        bot = Bot(token=env_config.get('TOKEN'), default=DefaultBotProperties(parse_mode=ParseMode.HTML))
         """Отправка статуса загрузки в Telegram"""
         while not self.stop_loading.is_set():
             try:
@@ -235,46 +244,31 @@ class EmbeddingsSearch:
                 result = self.cluster.query(count_query).rows()
                 doc_count = next(result)['count']
                 
-                message = f"📊 Статус загрузки документов:\nВсего документов в системе: {doc_count}\nВремя: {datetime.now().strftime('%H:%M:%S')}"
-                self.bot.send_message(chat_id=chat_id, text=message)
+                message = f"📊 Статус загрузки документов:\nВсего частей документов в системе: {doc_count}"
+                await bot.send_message(chat_id=chat_id, text=message)
                 
-                # Ждем 10 минут перед следующим обновлением
-                for _ in range(600):  # 10 минут = 600 секунд
+                # Ждем 5 минут перед следующим обновлением
+                for _ in range(300):  # 5 минут = 600 секунд
                     if self.stop_loading.is_set():
                         break
                     time.sleep(1)
                     
             except Exception as e:
-                logger.error(f"Ошибка при отправке статуса: {str(e)}")
+                logger.exception(f"Ошибка при отправке статуса: {str(e)}")
                 time.sleep(60)  # Подождем минуту при ошибке
 
-    def _load_documents_process(self, directory_path, chat_id):
+    def _load_documents_process_run(self, directory_path, chat_id):
+        asyncio.run(self._load_documents_process(directory_path, chat_id))
+
+    async def _load_documents_process(self, directory_path, chat_id):
+        bot = Bot(token=env_config.get('TOKEN'), default=DefaultBotProperties(parse_mode=ParseMode.HTML))
         """Процесс для загрузки документов"""
         try:
             # Создаем новое подключение к базе данных для процесса
-            cluster = Cluster.connect(
-                f"couchbase://{env_config.get('COUCHBASE_HOST')}",
-                ClusterOptions(
-                    PasswordAuthenticator(
-                        env_config.get('COUCHBASE_ADMINISTRATOR_USERNAME'),
-                        env_config.get('COUCHBASE_ADMINISTRATOR_PASSWORD')
-                    ),
-                    timeout_options=ClusterTimeoutOptions(
-                        kv_timeout=timedelta(seconds=120),
-                        query_timeout=timedelta(seconds=120),
-                        search_timeout=timedelta(seconds=120)
-                    )
-                )
-            )
-            
+            cluster = _get_cluster()
+
             # Создаем новый экземпляр vector_store для процесса
-            vector_store = CouchbaseVectorStore(
-                cluster=cluster,
-                bucket_name="vector_store",
-                scope_name="_default",
-                collection_name="_default",
-                index_name="vector-index"
-            )
+            vector_store = _get_vector_store(cluster)
             
             # Создаем новый storage_context
             storage_context = StorageContext.from_defaults(
@@ -283,11 +277,11 @@ class EmbeddingsSearch:
             
             result = self._load_documents_impl(directory_path, storage_context)
             # Отправляем финальное сообщение
-            self.bot.send_message(chat_id=chat_id, text=f"✅ Загрузка завершена!\n{result}")
+            await bot.send_message(chat_id=chat_id, text=f"✅ Загрузка завершена!\n{result}")
         except Exception as e:
             error_msg = f"❌ Ошибка при загрузке документов: {str(e)}"
             logger.exception(error_msg)
-            self.bot.send_message(chat_id=chat_id, text=error_msg)
+            await bot.send_message(chat_id=chat_id, text=error_msg)
         finally:
             self.stop_loading.set()
             self.loading_process = None
@@ -301,18 +295,18 @@ class EmbeddingsSearch:
         
         # Запускаем процесс для отправки статуса
         status_process = Process(
-            target=self._send_status_message,
-            args=(chat_id,)
+            target=self._send_status_message_run,
+            args=(chat_id,),
+            daemon=True
         )
-        status_process.daemon = True
         status_process.start()
         
         # Запускаем процесс для загрузки документов
         self.loading_process = Process(
-            target=self._load_documents_process,
-            args=(directory_path, chat_id)
+            target=self._load_documents_process_run,
+            args=(directory_path, chat_id),
+            daemon=True
         )
-        self.loading_process.daemon = True
         self.loading_process.start()
         
         return "Загрузка документов начата в фоновом режиме"
@@ -398,7 +392,7 @@ class EmbeddingsSearch:
                         response_parts.append("\n\n🌐 Дополнительная информация из интернета:\n" + str(internet_response))
                 
                 except Exception as e:
-                    logger.warning(f"Ошибка при поиске в интернете: {str(e)}")
+                    logger.exception(f"Ошибка при поиске в интернете: {str(e)}")
                     response_parts.append("\n⚠️ Не удалось получить информацию из интернета")
             
             if print_message:
@@ -459,7 +453,7 @@ class EmbeddingsSearch:
                         report_parts.append("\n🌐 Информация из интернета:\n" + str(internet_response))
                 
                 except Exception as e:
-                    logger.warning(f"Ошибка при поиске в интернете: {str(e)}")
+                    logger.exception(f"Ошибка при поиске в интернете: {str(e)}")
                     report_parts.append("\n⚠️ Не удалось получить информацию из интернета")
             
             # 4. Источники информации из локальных документов
@@ -503,7 +497,7 @@ class EmbeddingsSearch:
                     collection.remove(row['id'])
                     deleted_count += 1
                 except Exception as e:
-                    logger.error(f"Error deleting document {row['id']}: {str(e)}")
+                    logger.exception(f"Error deleting document {row['id']}: {str(e)}")
             
             logger.info(f"Deleted {deleted_count} documents")
 
