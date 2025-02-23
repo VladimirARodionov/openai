@@ -178,3 +178,6 @@ local.db
 /load/*
 /backups/*
 /templates/*
+
+# PostgreSQL backups
+/pg_backups/*

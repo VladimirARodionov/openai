@@ -1,4 +1,6 @@
-#!/bin/sh
+#!/bin/bash
+
+BACKUP_DIR="/backups"
 
 # Функция для вывода помощи
 show_help() {
@@ -10,12 +12,9 @@ show_help() {
     echo "  $0 delete-old <days>         - Delete backups older than X days"
 }
 
-BACKUP_BASE_DIR="/opt/couchbase/backup"
-SCRIPTS_DIR="/docker-entrypoint-initdb.d"
-
 case "$1" in
     backup)
-        ${SCRIPTS_DIR}/backup.sh
+        backup.sh
         ;;
     restore)
         if [ -z "$2" ]; then
@@ -23,11 +22,11 @@ case "$1" in
             show_help
             exit 1
         fi
-        ${SCRIPTS_DIR}/restore.sh "$2"
+        restore.sh "$2"
         ;;
     list)
         echo "Available backups:"
-        ls -lh "${BACKUP_BASE_DIR}"/*.tar.gz 2>/dev/null || echo "No backups found"
+        ls -lh "${BACKUP_DIR}"/*.sql.gz 2>/dev/null || echo "No backups found"
         ;;
     delete)
         if [ -z "$2" ]; then
@@ -35,7 +34,7 @@ case "$1" in
             show_help
             exit 1
         fi
-        rm -f "${BACKUP_BASE_DIR}/$2"
+        rm -f "${BACKUP_DIR}/$2"
         echo "Backup $2 deleted"
         ;;
     delete-old)
@@ -44,7 +43,7 @@ case "$1" in
             show_help
             exit 1
         fi
-        find "${BACKUP_BASE_DIR}" -name "*.tar.gz" -type f -mtime +$2 -exec rm -f {} \;
+        find "${BACKUP_DIR}" -name "*.sql.gz" -type f -mtime +$2 -exec rm -f {} \;
         echo "Old backups deleted"
         ;;
     *)
