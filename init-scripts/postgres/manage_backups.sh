@@ -14,7 +14,7 @@ show_help() {
 
 case "$1" in
     backup)
-        /docker-entrypoint-initdb.d/backup.sh
+        backup.sh
         ;;
     restore)
         if [ -z "$2" ]; then
@@ -22,7 +22,7 @@ case "$1" in
             show_help
             exit 1
         fi
-        /docker-entrypoint-initdb.d/restore.sh "$2"
+        restore.sh "$2"
         ;;
     list)
         echo "Available backups:"

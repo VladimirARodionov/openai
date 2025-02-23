@@ -1,6 +1,8 @@
 import logging.config
 import os
 import pathlib
+
+import alembic.config
 import sqlalchemy
 import decouple
 
@@ -31,14 +33,26 @@ logging.config.fileConfig(fname=pathlib.Path(__file__).resolve().parent / 'loggi
                           disable_existing_loggers=False)
 logging.getLogger('aiogram.dispatcher').propagate = False
 logging.getLogger('aiogram.event').propagate = False
-BASE_DIR = os.path.dirname(os.path.abspath(__file__)) + "/appdb/"
-os.path.join(BASE_DIR, 'local.db')
-db_string = 'sqlite:///' + os.path.join(BASE_DIR, 'local.db')
+if ENVIRONMENT == 'PRODUCTION':
+    db_name = env_config.get('POSTGRES_DB')
+    db_user = env_config.get('POSTGRES_USER')
+    db_pass = env_config.get('POSTGRES_PASSWORD')
+    db_host = 'postgres'
+    db_port = '5432'
+    db_string = 'postgresql://{}:{}@{}:{}/{}'.format(db_user, db_pass, db_host, db_port, db_name)
+else:
+    db_string = 'sqlite:///local.db'
 db = sqlalchemy.create_engine(
     db_string,
     **(
         dict(pool_recycle=900, pool_size=100, max_overflow=3)
     )
 )
+alembicArgs = [
+    '--raiseerr',
+    'upgrade', 'head',
+]
+alembic.config.main(argv=alembicArgs)
+
 superusers = [int(superuser_id) for superuser_id in env_config.get('SUPERUSERS').split(',')]
 START_MENU_TEXT = env_config.get('START_MENU_TEXT')
