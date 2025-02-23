@@ -1,3 +1,0 @@
-CREATE INDEX vector_index ON `vector_store`(embedding) 
-USING GSI 
-WITH {"num_replica": 0, "num_array_partitions": 1}; 

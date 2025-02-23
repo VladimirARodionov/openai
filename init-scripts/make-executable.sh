@@ -1,1 +1,0 @@
-chmod +x init-scripts/init.sh 
