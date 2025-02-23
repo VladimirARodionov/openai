@@ -3,19 +3,11 @@
 ## config
 add .env file as copy of .env.example file
 
-source venv/bin/activate
-
-pip install -r requirements.txt
-
-alembic upgrade head
-
-chmod -R +x init-scripts
-
 chmod -R a+rw logs
 
-sudo docker compose -p ay build --no-cache
+sudo docker compose build --no-cache
 
-sudo docker compose -p ay up --build -d
+sudo docker compose up --build -d
 
 python bot.py
 
