@@ -29,10 +29,6 @@ def get_env_config() -> decouple.Config:
 
 env_config = get_env_config()
 
-logging.config.fileConfig(fname=pathlib.Path(__file__).resolve().parent / 'logging.ini',
-                          disable_existing_loggers=False)
-logging.getLogger('aiogram.dispatcher').propagate = False
-logging.getLogger('aiogram.event').propagate = False
 if ENVIRONMENT == 'PRODUCTION':
     db_name = env_config.get('POSTGRES_DB')
     db_user = env_config.get('POSTGRES_USER')
@@ -48,11 +44,23 @@ db = sqlalchemy.create_engine(
         dict(pool_recycle=900, pool_size=100, max_overflow=3)
     )
 )
+
+logging.config.fileConfig(fname=pathlib.Path(__file__).resolve().parent / 'logging.ini',
+                          disable_existing_loggers=False)
+logging.getLogger('aiogram.dispatcher').propagate = False
+logging.getLogger('aiogram.event').propagate = False
+logger = logging.getLogger(__name__)
+
 alembicArgs = [
     '--raiseerr',
     'upgrade', 'head',
 ]
 alembic.config.main(argv=alembicArgs)
+
+logging.config.fileConfig(fname=pathlib.Path(__file__).resolve().parent / 'logging.ini',
+                          disable_existing_loggers=False)
+logging.getLogger('aiogram.dispatcher').propagate = False
+logging.getLogger('aiogram.event').propagate = False
 
 superusers = [int(superuser_id) for superuser_id in env_config.get('SUPERUSERS').split(',')]
 START_MENU_TEXT = env_config.get('START_MENU_TEXT')

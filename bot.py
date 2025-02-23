@@ -10,7 +10,6 @@ from locale_config import i18n
 from aiogram.types import BotCommand, BotCommandScopeDefault
 
 from create_bot import env_config
-from handlers.router import router
 
 
 logger = logging.getLogger(__name__)
@@ -39,6 +38,8 @@ async def stop_bot():
 
 
 async def main():
+    from handlers.router import router
+
     dp.include_router(router)
 
     # регистрация функций
