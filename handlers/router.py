@@ -108,7 +108,7 @@ async def process_delete_user(message: Message, state: FSMContext):
 
 @router.message(Command('load_from_dir'), IsSuperUser())
 async def load_from_dir(message: Message):
-    response = searcher.load_documents_from_directory('load')
+    response = searcher.load_documents_from_directory('load', message.from_user.id)
     await message.answer(response, reply_markup=main_kb(message.from_user.id))
 
 

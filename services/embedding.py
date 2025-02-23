@@ -1,10 +1,15 @@
+import asyncio
 import logging
 import time
-from datetime import timedelta
+from datetime import timedelta, datetime
 from pathlib import Path
+from multiprocessing import Process, Event
 
 import openai
 import tiktoken
+from aiogram import Bot
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
 from llama_cloud import MessageRole
 from llama_index.core import Settings, StorageContext, SimpleDirectoryReader, VectorStoreIndex, PromptTemplate, Document, SummaryIndex
 from llama_index.core.base.llms.types import ChatMessage
@@ -20,6 +25,7 @@ from llama_index.llms.openai import OpenAI
 from llama_index.core.prompts import ChatPromptTemplate
 
 from create_bot import env_config
+from locale_config import i18n
 from services.common import get_search_from_inet
 
 logger = logging.getLogger(__name__)
@@ -123,6 +129,32 @@ def _extract_topics(text: str) -> list[str]:
         logger.warning(f"Ошибка при извлечении тем: {str(e)}")
         return []
 
+def _get_cluster():
+    couchbase_host = env_config.get('COUCHBASE_HOST')
+    connection_string = f"couchbase://{couchbase_host}"
+    cluster = Cluster.connect(
+    connection_string,
+    ClusterOptions(PasswordAuthenticator(env_config.get('COUCHBASE_ADMINISTRATOR_USERNAME'),
+                                         env_config.get('COUCHBASE_ADMINISTRATOR_PASSWORD')),
+                   timeout_options=ClusterTimeoutOptions(
+                       kv_timeout=timedelta(seconds=120),
+                       query_timeout=timedelta(seconds=120),
+                       search_timeout=timedelta(seconds=120)
+                   ))
+    )
+    return cluster
+
+def _get_vector_store(cluster):
+    vector_store = CouchbaseVectorStore(
+        cluster=cluster,
+        bucket_name="vector_store",
+        scope_name="_default",
+        collection_name="_default",
+        index_name="vector-index"
+    )
+    logger.info("Vector store initialized successfully")
+    return vector_store
+
 
 class EmbeddingsSearch:
     def __init__(self):
@@ -151,21 +183,7 @@ class EmbeddingsSearch:
             request_timeout=30
         )
 
-        # Получаем параметры подключения из переменных окружения
-        couchbase_host = env_config.get('COUCHBASE_HOST')
-
-        # Используем connection string с указанием всех необходимых портов
-        connection_string = f"couchbase://{couchbase_host}"
-        self.cluster = Cluster.connect(
-            connection_string,
-            ClusterOptions(PasswordAuthenticator(env_config.get('COUCHBASE_ADMINISTRATOR_USERNAME'),
-                                                 env_config.get('COUCHBASE_ADMINISTRATOR_PASSWORD')),
-                           timeout_options=ClusterTimeoutOptions(
-                               kv_timeout=timedelta(seconds=120),
-                               query_timeout=timedelta(seconds=120),
-                               search_timeout=timedelta(seconds=120)
-                           ))
-        )
+        self.cluster = _get_cluster()
         
         try:
             # Проверяем доступные индексы
@@ -181,15 +199,7 @@ class EmbeddingsSearch:
             logger.info(f"Available GSI indexes in _default scope: {gsi_indexes}")
             
             # Создаем векторное хранилище
-            self.vector_store = CouchbaseVectorStore(
-                cluster=self.cluster,
-                bucket_name="vector_store",
-                scope_name="_default",
-                collection_name="_default",
-                index_name="vector-index"
-            )
-            logger.info("Vector store initialized successfully")
-            
+            self.vector_store = _get_vector_store(self.cluster)
         except Exception as e:
             logger.error(f"Error initializing vector store: {str(e)}")
             raise
@@ -199,6 +209,9 @@ class EmbeddingsSearch:
             vector_store=self.vector_store
         )
         self.node_parser = SimpleNodeParser.from_defaults()
+
+        self.loading_process = None
+        self.stop_loading = Event()
 
     def num_tokens(self, text):
         """Подсчет токенов в тексте"""
@@ -219,37 +232,104 @@ class EmbeddingsSearch:
         
         return paragraphs
 
-    def load_documents_from_directory(self, directory_path):
-        """Загрузка документов из директории, создание индекса и сохранение в Couchbase
-        
-        Поддерживаемые форматы:
-        - Текстовые: .txt, .md, .json, .csv, .html, .xml, .pdf, .doc, .docx, .ppt, .pptx
-        - Аудио: .mp3, .mp4, .mpeg, .mpga, .m4a, .wav, .webm
-        - Изображения: .jpg, .jpeg, .png, .gif, .webp
-        - Код: .py, .js, .java, .cpp, .h, .c, .cs, .php, .rb, .swift, .go
-        
-        Args:
-            directory_path (str): Путь к директории с документами
-        """
+    def _send_status_message_run(self, chat_id):
+        asyncio.run(self._send_status_message(chat_id))
+
+    async def _send_status_message(self, chat_id):
+        bot = Bot(token=env_config.get('TOKEN'), default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+        """Отправка статуса загрузки в Telegram"""
+        while not self.stop_loading.is_set():
+            try:
+                count_query = f"SELECT COUNT(*) as count FROM `{self.vector_store._bucket_name}`.`{self.vector_store._scope_name}`.`{self.vector_store._collection_name}`"
+                result = self.cluster.query(count_query).rows()
+                doc_count = next(result)['count']
+                
+                message = (
+                    i18n.format_value('loading_status') + '\n' +
+                    i18n.format_value('loading_total_docs', {'count': doc_count}) + '\n' +
+                    i18n.format_value('loading_time', {'time': datetime.now().strftime('%H:%M:%S')})
+                )
+                await bot.send_message(chat_id=chat_id, text=message)
+                
+                # Ждем 5 минут перед следующим обновлением
+                for _ in range(300):  # 5 минут = 600 секунд
+                    if self.stop_loading.is_set():
+                        break
+                    time.sleep(1)
+                    
+            except Exception as e:
+                logger.exception(f"Ошибка при отправке статуса: {str(e)}")
+                time.sleep(60)  # Подождем минуту при ошибке
+
+    def _load_documents_process_run(self, directory_path, chat_id):
+        asyncio.run(self._load_documents_process(directory_path, chat_id))
+
+    async def _load_documents_process(self, directory_path, chat_id):
+        bot = Bot(token=env_config.get('TOKEN'), default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+        """Процесс для загрузки документов"""
         try:
-            # Отключаем логирование OpenAI запросов
+            # Создаем новое подключение к базе данных для процесса
+            cluster = _get_cluster()
+
+            # Создаем новый экземпляр vector_store для процесса
+            vector_store = _get_vector_store(cluster)
+            
+            # Создаем новый storage_context
+            storage_context = StorageContext.from_defaults(
+                vector_store=vector_store
+            )
+            
+            result = self._load_documents_impl(directory_path, storage_context)
+            await bot.send_message(
+                chat_id=chat_id,
+                text=i18n.format_value('loading_complete') + '\n' + result
+            )
+        except Exception as e:
+            error_msg = i18n.format_value('loading_error', {'error': str(e)})
+            logger.exception(error_msg)
+            await bot.send_message(chat_id=chat_id, text=error_msg)
+        finally:
+            self.stop_loading.set()
+            self.loading_process = None
+
+    def load_documents_from_directory(self, directory_path, chat_id):
+        """Асинхронная загрузка документов из директории"""
+        if self.loading_process and self.loading_process.is_alive():
+            return i18n.format_value('loading_already_running')
+
+        self.stop_loading.clear()
+        
+        # Запускаем процесс для отправки статуса
+        status_process = Process(
+            target=self._send_status_message_run,
+            args=(chat_id,),
+            daemon=True
+        )
+        status_process.start()
+        
+        # Запускаем процесс для загрузки документов
+        self.loading_process = Process(
+            target=self._load_documents_process_run,
+            args=(directory_path, chat_id),
+            daemon=True
+        )
+        self.loading_process.start()
+        
+        return i18n.format_value('loading_started')
+
+    def _load_documents_impl(self, directory_path, storage_context=None):
+        """Реализация загрузки документов"""
+        try:
             openai.OpenAI._disable_logging = True
             logger.info("Начинаем загрузку документов")
 
-            # Используем SimpleDirectoryReader для загрузки всех поддерживаемых файлов
             documents = SimpleDirectoryReader(
                 input_dir=directory_path,
                 recursive=True,
                 filename_as_id=True,
                 required_exts=[
-                    # Текстовые форматы
                     ".txt", ".md", ".json", ".csv", ".html", ".xml",
                     ".pdf", ".doc", ".docx", ".ppt", ".pptx",
-                    # Аудио форматы
-                    #".mp3", ".mp4", ".mpeg", ".mpga", ".m4a", ".wav", ".webm",
-                    # Форматы изображений
-                    #".jpg", ".jpeg", ".png", ".gif", ".webp",
-                    # Форматы кода
                     ".py", ".js", ".java", ".cpp", ".h", ".c", ".cs", ".php", ".rb", ".swift", ".go"
                 ],
                 exclude_hidden=True
@@ -274,27 +354,22 @@ class EmbeddingsSearch:
                 logger.info("Создаем индекс из документов целиком")
                 index = VectorStoreIndex.from_documents(
                     documents,
-                    storage_context=self.storage_context,
+                    storage_context=storage_context or self.storage_context,
                     show_progress=True
                 )
 
                 file_count = len(documents)
                 logger.info(f"Обработано файлов: {file_count}")
                 
-                # Включаем логирование обратно
-                openai.OpenAI._disable_logging = False
-                
-                return f"Загружено {file_count} файлов"
+                return i18n.format_value('loading_files_count', {'count': file_count})
             else:
-                # Включаем логирование обратно
-                openai.OpenAI._disable_logging = False
-                return "Не найдено поддерживаемых файлов в указанной директории"
+                return i18n.format_value('loading_no_files')
             
         except Exception as e:
-            # Включаем логирование обратно даже в случае ошибки
-            openai.OpenAI._disable_logging = False
             logger.exception(f"Ошибка при загрузке документов: {str(e)}")
-            return f"Произошла ошибка при загрузке документов: {str(e)}"
+            raise
+        finally:
+            openai.OpenAI._disable_logging = False
 
     def ask(self, query, user_id, print_message=False):
         """Ответ на вопрос с использованием GPT и релевантных текстов"""
@@ -320,11 +395,11 @@ class EmbeddingsSearch:
                     )
                     
                     if str(internet_response).strip():
-                        response_parts.append("\n\n🌐 Дополнительная информация из интернета:\n" + str(internet_response))
+                        response_parts.append(i18n.format_value('search_internet_title') + str(internet_response))
                 
                 except Exception as e:
-                    logger.warning(f"Ошибка при поиске в интернете: {str(e)}")
-                    response_parts.append("\n⚠️ Не удалось получить информацию из интернета")
+                    logger.exception(f"Ошибка при поиске в интернете: {str(e)}")
+                    response_parts.append(i18n.format_value('search_internet_error'))
             
             if print_message:
                 logger.info(f"Query: {query}")
@@ -334,7 +409,7 @@ class EmbeddingsSearch:
             
         except Exception as e:
             logger.exception(str(e))
-            return f"Произошла ошибка: {str(e)}"
+            return i18n.format_value('search_error', {'error': str(e)})
 
     def report(self, query: str, user_id, print_message=False):
         """Формирование детального отчета по запросу"""
@@ -352,7 +427,7 @@ class EmbeddingsSearch:
             # 1. Основной ответ из локальных документов
             query_engine = _create_query_engine(index)
             main_response = query_engine.query(query)
-            report_parts.append(f"🔍 Основной ответ из документов:\n\n{str(main_response)}\n")
+            report_parts.append(i18n.format_value('search_local_title') + '\n' + str(main_response) + '\n')
             
             # 2. Краткое саммари локальных документов
             if nodes:
@@ -367,7 +442,7 @@ class EmbeddingsSearch:
                 summary = summary_index.as_query_engine().query(
                     "Создай краткое саммари найденной информации в 2-3 предложения"
                 )
-                report_parts.append(f"\n📝 Краткое саммари локальных документов:\n{str(summary)}\n")
+                report_parts.append(i18n.format_value('search_summary_title') + str(summary) + '\n')
             
             # 3. Поиск в интернете через GPT, если включен
             if search_from_inet:
@@ -381,11 +456,11 @@ class EmbeddingsSearch:
                     )
                     
                     if str(internet_response).strip():
-                        report_parts.append("\n🌐 Информация из интернета:\n" + str(internet_response))
+                        report_parts.append(i18n.format_value('search_internet_title') + str(internet_response))
                 
                 except Exception as e:
-                    logger.warning(f"Ошибка при поиске в интернете: {str(e)}")
-                    report_parts.append("\n⚠️ Не удалось получить информацию из интернета")
+                    logger.exception(f"Ошибка при поиске в интернете: {str(e)}")
+                    report_parts.append(i18n.format_value('search_internet_error'))
             
             # 4. Источники информации из локальных документов
             sources = {}
@@ -393,15 +468,18 @@ class EmbeddingsSearch:
                 source = node.metadata.get('source', 'Unknown')
                 sources[source] = sources.get(source, 0) + 1
             
-            report_parts.append("\n📚 Основные локальные источники:")
+            report_parts.append(i18n.format_value('search_sources_title'))
             for source, count in sorted(sources.items(), key=lambda x: x[1], reverse=True)[:5]:
-                report_parts.append(f"- {source}: {count} релевантных фрагментов")
+                report_parts.append(i18n.format_value('search_source_count', {
+                    'source': source,
+                    'count': count
+                }))
             
             return "\n".join(report_parts)
             
         except Exception as e:
             logger.exception(str(e))
-            return f"Произошла ошибка при формировании отчета: {str(e)}"
+            return i18n.format_value('search_report_error', {'error': str(e)})
 
     def clear_database(self):
         """Очистка базы данных"""
@@ -428,7 +506,7 @@ class EmbeddingsSearch:
                     collection.remove(row['id'])
                     deleted_count += 1
                 except Exception as e:
-                    logger.error(f"Error deleting document {row['id']}: {str(e)}")
+                    logger.exception(f"Error deleting document {row['id']}: {str(e)}")
             
             logger.info(f"Deleted {deleted_count} documents")
 
@@ -441,13 +519,13 @@ class EmbeddingsSearch:
             
             if final_count == 0:
                 logger.info("База данных успешно очищена")
-                return "База данных очищена"
+                return i18n.format_value('db_cleared')
             else:
-                error_msg = f"Не все документы были удалены. Осталось: {final_count}"
+                error_msg = i18n.format_value('db_clear_partial', {'count': final_count})
                 logger.error(error_msg)
                 return error_msg
             
         except Exception as e:
-            error_msg = f"Ошибка при очистке базы данных: {str(e)}"
+            error_msg = i18n.format_value('db_clear_error', {'error': str(e)})
             logger.exception(error_msg)
             return error_msg
