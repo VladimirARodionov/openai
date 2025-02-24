@@ -26,7 +26,7 @@ from llama_index.core.prompts import ChatPromptTemplate
 
 from create_bot import env_config
 from locale_config import i18n
-from services.common import get_search_from_inet
+from services.common import get_search_from_inet, get_history, add_history
 
 logger = logging.getLogger(__name__)
 
@@ -377,19 +377,36 @@ class EmbeddingsSearch:
             search_from_inet = get_search_from_inet(user_id)
             response_parts = []
             
-            # 1. Поиск в локальных документах
+            # Получаем историю поиска
+            history = get_history(user_id)
+            history_context = "\n".join([
+                f"Предыдущий вопрос: {h.search_text}\nПредыдущий ответ: {h.answer_text}"
+                for h in history
+            ])
+            
+            # Добавляем историю в промпт
+            if history_context:
+                query_with_history = f"""
+                    История предыдущих вопросов и ответов:\n
+                    {history_context}\n\n
+                    Текущий вопрос с учетом контекста предыдущих вопросов:\n
+                    {query}
+                    """
+            else:
+                query_with_history = query
+            
+            # Поиск в локальных документах
             index = VectorStoreIndex.from_vector_store(self.vector_store)
             query_engine = _create_query_engine(index)
-            local_response = query_engine.query(query)
+            local_response = query_engine.query(query_with_history)
             response_parts.append(str(local_response))
             
-            # 2. Поиск в интернете через GPT, если включен
+            # Поиск в интернете через GPT, если включен
             if search_from_inet:
                 try:
-                    # Используем шаблон для поиска в интернете
                     internet_response = Settings.llm.complete(
                         INTERNET_QA_TEMPLATE.format(
-                            query_str=query,
+                            query_str=query_with_history,
                             local_response=str(local_response)
                         )
                     )
@@ -401,15 +418,23 @@ class EmbeddingsSearch:
                     logger.exception(f"Ошибка при поиске в интернете: {str(e)}")
                     response_parts.append(i18n.format_value('search_internet_error'))
             
+            final_response = "\n".join(response_parts)
+            
+            # Сохраняем запрос и ответ в историю
+            add_history(user_id, query, final_response, False, "simple_response")
+            
             if print_message:
                 logger.info(f"Query: {query}")
                 logger.info(f"Response: {response_parts}")
             
-            return "\n".join(response_parts)
+            return final_response
             
         except Exception as e:
             logger.exception(str(e))
-            return i18n.format_value('search_error', {'error': str(e)})
+            error_response = i18n.format_value('search_error', {'error': str(e)})
+            # Сохраняем ошибку в историю
+            add_history(user_id, query, error_response, True, "simple_response")
+            return error_response
 
     def report(self, query: str, user_id, print_message=False):
         """Формирование детального отчета по запросу"""
@@ -417,16 +442,34 @@ class EmbeddingsSearch:
             search_from_inet = get_search_from_inet(user_id)
             report_parts = []
             
+            # Получаем историю поиска
+            history = get_history(user_id)
+            history_context = "\n".join([
+                f"Предыдущий вопрос: {h.search_text}\nПредыдущий ответ: {h.answer_text}"
+                for h in history
+            ])
+            
+            # Добавляем историю в промпт
+            if history_context:
+                query_with_history = f"""
+                    История предыдущих вопросов и ответов:\n
+                    {history_context}\n\n
+                    Текущий вопрос с учетом контекста предыдущих вопросов:\n
+                    {query}
+                    """
+            else:
+                query_with_history = query
+            
             # Создаем индекс для поиска в локальных документах
             index = VectorStoreIndex.from_vector_store(self.vector_store)
             
             # Получаем релевантные ноды с метаданными
             retriever = index.as_retriever(similarity_top_k=10)
-            nodes = retriever.retrieve(query)
+            nodes = retriever.retrieve(query_with_history)
             
             # 1. Основной ответ из локальных документов
             query_engine = _create_query_engine(index)
-            main_response = query_engine.query(query)
+            main_response = query_engine.query(query_with_history)
             report_parts.append(i18n.format_value('search_local_title') + '\n' + str(main_response) + '\n')
             
             # 2. Краткое саммари локальных документов
@@ -450,7 +493,7 @@ class EmbeddingsSearch:
                     # Используем шаблон для детального отчета
                     internet_response = Settings.llm.complete(
                         INTERNET_REPORT_TEMPLATE.format(
-                            query_str=query,
+                            query_str=query_with_history,
                             local_response=str(main_response)
                         )
                     )
@@ -475,11 +518,19 @@ class EmbeddingsSearch:
                     'count': count
                 }))
             
-            return "\n".join(report_parts)
+            final_report = "\n".join(report_parts)
+            
+            # Сохраняем запрос и ответ в историю
+            add_history(user_id, query, final_report, False, "detailed_report")
+            
+            return final_report
             
         except Exception as e:
             logger.exception(str(e))
-            return i18n.format_value('search_report_error', {'error': str(e)})
+            error_response = i18n.format_value('search_report_error', {'error': str(e)})
+            # Сохраняем ошибку в историю
+            add_history(user_id, query, error_response, True, "detailed_report")
+            return error_response
 
     def clear_database(self):
         """Очистка базы данных"""
@@ -494,10 +545,21 @@ class EmbeddingsSearch:
             result = self.cluster.query(count_query).rows()
             initial_count = next(result)['count']
             logger.info(f"Documents before deletion: {initial_count}")
-
-            # Удаляем все документы одним запросом
-            delete_query = f"DELETE FROM `{self.vector_store._bucket_name}`.`{self.vector_store._scope_name}`.`{self.vector_store._collection_name}`"
-            self.cluster.query(delete_query)
+            
+            # Получаем все ID документов
+            id_query = f"SELECT META().id FROM `{self.vector_store._bucket_name}`.`{self.vector_store._scope_name}`.`{self.vector_store._collection_name}`"
+            result = self.cluster.query(id_query).rows()
+            
+            # Удаляем документы по одному
+            deleted_count = 0
+            for row in result:
+                try:
+                    collection.remove(row['id'])
+                    deleted_count += 1
+                except Exception as e:
+                    logger.exception(f"Error deleting document {row['id']}: {str(e)}")
+            
+            logger.info(f"Deleted {deleted_count} documents")
 
             time.sleep(3)
 

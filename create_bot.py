@@ -2,8 +2,6 @@ import logging.config
 import os
 import pathlib
 
-from alembic.config import Config
-from alembic import command
 import sqlalchemy
 import decouple
 
@@ -45,15 +43,6 @@ db = sqlalchemy.create_engine(
         dict(pool_recycle=900, pool_size=100, max_overflow=3)
     )
 )
-
-logging.config.fileConfig(fname=pathlib.Path(__file__).resolve().parent / 'logging.ini',
-                          disable_existing_loggers=False)
-logging.getLogger('aiogram.dispatcher').propagate = False
-logging.getLogger('aiogram.event').propagate = False
-logger = logging.getLogger(__name__)
-
-alembic_cfg = Config("alembic.ini")
-command.upgrade(alembic_cfg, "head")
 
 logging.config.fileConfig(fname=pathlib.Path(__file__).resolve().parent / 'logging.ini',
                           disable_existing_loggers=False)

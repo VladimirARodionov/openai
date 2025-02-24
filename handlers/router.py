@@ -19,7 +19,13 @@ router = Router()
 logger = logging.getLogger(__name__)
 
 add_superusers()
-searcher = EmbeddingsSearch()
+searcher = None
+
+def _get_searcher():
+    global searcher
+    if searcher is None:
+        searcher = EmbeddingsSearch()
+    return searcher
 
 class FSMAddUser(StatesGroup):
     wait_user = State()
@@ -108,12 +114,14 @@ async def process_delete_user(message: Message, state: FSMContext):
 
 @router.message(Command('load_from_dir'), IsSuperUser())
 async def load_from_dir(message: Message):
+    searcher = _get_searcher()
     response = searcher.load_documents_from_directory('load', message.from_user.id)
     await message.answer(response, reply_markup=main_kb(message.from_user.id))
 
 
 @router.message(Command('clear_database'), IsSuperUser())
 async def clear_database(message: Message):
+    searcher = _get_searcher()
     response = searcher.clear_database()
     await message.answer(response, reply_markup=main_kb(message.from_user.id))
 
@@ -170,6 +178,7 @@ async def process_callback(callback_query: CallbackQuery, state: FSMContext):
         processing_msg = await callback_query.message.answer("⏳ Подготавливаю ответ...")
         
         try:
+            searcher = _get_searcher()
             if user_choice == "simple_response":
                 response = searcher.ask(msg, callback_query.from_user.id, True)
                 await print_parts(response, callback_query)

@@ -1,9 +1,10 @@
 import logging
 
+from sqlalchemy import and_
 from sqlalchemy.orm import Session
 
 from create_bot import db, superusers
-from db.models.model import User
+from db.models.model import User, History
 from locale_config import i18n
 
 logger = logging.getLogger(__name__)
@@ -161,6 +162,31 @@ def get_search_from_inet(user_id) -> bool:
         return search_from_inet
     except Exception:
         logger.exception('Ошибка при проверке режима поиска из интернета')
+        session.rollback()
+    finally:
+        session.close()
+
+def get_history(user_id):
+    session = Session(db)
+    try:
+        history = (session.query(History)
+                   .filter(and_(History.user_id == user_id, History.is_error == False))
+                   .order_by(History.created_at.desc()).limit(10).all())
+        return history
+    except Exception:
+        logger.exception('Ошибка при загрузке истории поиска')
+        session.rollback()
+    finally:
+        session.close()
+
+def add_history(user_id, search_text, answer_text, is_error, search_type):
+    session = Session(db)
+    try:
+        history = History(user_id=user_id, search_text=search_text, answer_text=answer_text, is_error=is_error, search_type=search_type)
+        session.add(history)
+        session.commit()
+    except Exception:
+        logger.exception('Ошибка при добавлении истории поиска')
         session.rollback()
     finally:
         session.close()

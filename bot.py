@@ -4,6 +4,8 @@ import logging
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from alembic.config import Config
+from alembic import command
 
 from locale_config import i18n
 
@@ -11,6 +13,9 @@ from aiogram.types import BotCommand, BotCommandScopeDefault
 
 from create_bot import env_config
 
+alembic_cfg = Config("alembic.ini")
+alembic_cfg.attributes['configure_logger'] = False
+command.upgrade(alembic_cfg, "head")
 
 logger = logging.getLogger(__name__)
 
@@ -64,3 +69,5 @@ if __name__ == "__main__":
         logger.info('Клавиатурное прерывание')
     except asyncio.CancelledError:
         logger.info('Прерывание')
+    except Exception:
+        logger.exception('Неизвестная ошибка')
