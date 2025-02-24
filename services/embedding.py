@@ -264,6 +264,7 @@ class EmbeddingsSearch:
             except Exception as e:
                 logger.exception(f"Ошибка при отправке статуса: {str(e)}")
                 break
+        await session.close()
 
 
     def _load_documents_process_run(self, directory_path, chat_id):
@@ -297,6 +298,7 @@ class EmbeddingsSearch:
         finally:
             self.stop_loading.set()
             self.loading_process = None
+            await session.close()
 
     def load_documents_from_directory(self, directory_path, chat_id):
         """Асинхронная загрузка документов из директории"""
