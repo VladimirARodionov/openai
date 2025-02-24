@@ -21,7 +21,7 @@ wait_for_couchbase || exit 1
 # Получаем текущую дату для имени бэкапа
 BACKUP_DATE=$(date +%Y%m%d_%H%M%S)
 BACKUP_DIR="/opt/couchbase/backup/temp_backup_${BACKUP_DATE}"
-ARCHIVE_NAME="/opt/couchbase/backup/backup_${BACKUP_DATE}.tar.gz"
+ARCHIVE_NAME="/opt/couchbase/backup/couchbase_backup_${COMPOSE_PROJECT_NAME}_${BACKUP_DATE}.tar.gz"
 
 echo "Starting backup to ${BACKUP_DIR}..."
 

@@ -3,7 +3,7 @@ FROM python:3.13-slim-bullseye
 
 # Install apt packages
 RUN apt-get update
-RUN apt-get install --no-install-recommends -y build-essential
+#RUN apt-get install --no-install-recommends -y build-essential
 
 ENV ENVIRONMENT=PRODUCTION
 # Copy the requirements file into the container

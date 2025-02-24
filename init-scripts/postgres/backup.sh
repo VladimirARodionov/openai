@@ -2,7 +2,7 @@
 
 BACKUP_DIR="/backups"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-BACKUP_FILE="${BACKUP_DIR}/pg_backup_${TIMESTAMP}.sql.gz"
+BACKUP_FILE="${BACKUP_DIR}/pg_backup_${COMPOSE_PROJECT_NAME}_${TIMESTAMP}.sql.gz"
 
 # Создаем бэкап
 pg_dump -U ${POSTGRES_USER} ${POSTGRES_DB} | gzip > ${BACKUP_FILE}

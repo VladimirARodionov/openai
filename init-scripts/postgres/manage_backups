@@ -5,11 +5,11 @@ BACKUP_DIR="/backups"
 # Функция для вывода помощи
 show_help() {
     echo "Usage:"
-    echo "  $0 backup                    - Create new backup"
-    echo "  $0 restore <backup_name>     - Restore from backup"
-    echo "  $0 list                      - List available backups"
-    echo "  $0 delete <backup_name>      - Delete specific backup"
-    echo "  $0 delete-old <days>         - Delete backups older than X days"
+    echo "  manage_backups backup                    - Create new backup"
+    echo "  manage_backups restore <backup_name>     - Restore from backup"
+    echo "  manage_backups list                      - List available backups"
+    echo "  manage_backups delete <backup_name>      - Delete specific backup"
+    echo "  manage_backups delete-old <days>         - Delete backups older than X days"
 }
 
 case "$1" in
@@ -26,7 +26,7 @@ case "$1" in
         ;;
     list)
         echo "Available backups:"
-        ls -lh "${BACKUP_DIR}"/*.sql.gz 2>/dev/null || echo "No backups found"
+        cd "${BACKUP_DIR}" && ls *.sql.gz 2>/dev/null || echo "No backups found"
         ;;
     delete)
         if [ -z "$2" ]; then

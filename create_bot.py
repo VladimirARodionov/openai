@@ -2,7 +2,8 @@ import logging.config
 import os
 import pathlib
 
-import alembic.config
+from alembic.config import Config
+from alembic import command
 import sqlalchemy
 import decouple
 
@@ -51,11 +52,8 @@ logging.getLogger('aiogram.dispatcher').propagate = False
 logging.getLogger('aiogram.event').propagate = False
 logger = logging.getLogger(__name__)
 
-alembicArgs = [
-    '--raiseerr',
-    'upgrade', 'head',
-]
-alembic.config.main(argv=alembicArgs)
+alembic_cfg = Config("alembic.ini")
+command.upgrade(alembic_cfg, "head")
 
 logging.config.fileConfig(fname=pathlib.Path(__file__).resolve().parent / 'logging.ini',
                           disable_existing_loggers=False)

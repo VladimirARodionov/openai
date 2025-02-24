@@ -32,6 +32,7 @@ services:
       - WEBDAV_LOGIN=${WEBDAV_LOGIN}
       - WEBDAV_PASSWORD=${WEBDAV_PASSWORD}
       - WEBDAV_URL=${WEBDAV_URL}
+      - COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME}
       - TZ=${TZ}
     volumes:
       - postgres_data:/var/lib/postgresql/data
