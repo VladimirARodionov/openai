@@ -9,6 +9,7 @@ import openai
 import tiktoken
 from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
 from llama_cloud import MessageRole
 from llama_index.core import Settings, StorageContext, SimpleDirectoryReader, VectorStoreIndex, PromptTemplate, Document, SummaryIndex
@@ -236,12 +237,15 @@ class EmbeddingsSearch:
         asyncio.run(self._send_status_message(chat_id))
 
     async def _send_status_message(self, chat_id):
-        bot = Bot(token=env_config.get('TOKEN'), default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+        session = AiohttpSession()
+        bot = Bot(token=env_config.get('TOKEN'), default=DefaultBotProperties(parse_mode=ParseMode.HTML), session=session)
+        cluster = _get_cluster()
+        vector_store = _get_vector_store(cluster)
         """Отправка статуса загрузки в Telegram"""
         while not self.stop_loading.is_set():
             try:
-                count_query = f"SELECT COUNT(*) as count FROM `{self.vector_store._bucket_name}`.`{self.vector_store._scope_name}`.`{self.vector_store._collection_name}`"
-                result = self.cluster.query(count_query).rows()
+                count_query = f"SELECT COUNT(*) as count FROM `{vector_store._bucket_name}`.`{vector_store._scope_name}`.`{vector_store._collection_name}`"
+                result = cluster.query(count_query).rows()
                 doc_count = next(result)['count']
                 
                 message = (
@@ -259,13 +263,15 @@ class EmbeddingsSearch:
                     
             except Exception as e:
                 logger.exception(f"Ошибка при отправке статуса: {str(e)}")
-                time.sleep(60)  # Подождем минуту при ошибке
+                break
+
 
     def _load_documents_process_run(self, directory_path, chat_id):
         asyncio.run(self._load_documents_process(directory_path, chat_id))
 
     async def _load_documents_process(self, directory_path, chat_id):
-        bot = Bot(token=env_config.get('TOKEN'), default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+        session = AiohttpSession()
+        bot = Bot(token=env_config.get('TOKEN'), default=DefaultBotProperties(parse_mode=ParseMode.HTML), session=session)
         """Процесс для загрузки документов"""
         try:
             # Создаем новое подключение к базе данных для процесса
