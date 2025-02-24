@@ -1,7 +1,7 @@
 import datetime
 
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy import Column, BIGINT, TIMESTAMP, MetaData, VARCHAR, BOOLEAN
+from sqlalchemy import Column, BIGINT, TIMESTAMP, MetaData, VARCHAR, BOOLEAN, TEXT
 
 Base = declarative_base()
 
@@ -36,3 +36,15 @@ class User(Base):
 
     def __str__(self) -> str:
         return f"{self.id!r} [{self.name!r}]"
+
+class History(Base):
+    __tablename__ = 'history'
+    metadata = metadata
+    id = Column(BIGINT, primary_key=True)
+    user_id = Column(BIGINT, nullable=False)
+    search_text = Column(TEXT, nullable=False)
+    answer_text = Column(TEXT, nullable=False)
+    is_error = Column(BOOLEAN, nullable=False, default=False)
+    search_type = Column(VARCHAR, nullable=False)
+    created_at = Column(TIMESTAMP(timezone=True), nullable=False, default=datetime.datetime.now())
+    updated_at = Column(TIMESTAMP(timezone=True), nullable=False, default=datetime.datetime.now(), onupdate=datetime.datetime.now())
