@@ -34,6 +34,7 @@ services:
       - WEBDAV_URL=${WEBDAV_URL}
       - COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME}
       - TZ=${TZ}
+    restart: always
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./pg_backups:/backups
