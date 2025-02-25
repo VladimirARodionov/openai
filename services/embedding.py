@@ -214,6 +214,8 @@ class EmbeddingsSearch:
         self.loading_process = None
         self.stop_loading = Event()
 
+        self.use_history = env_config.get('USE_HISTORY_IN_QUERIES', False)
+
     def num_tokens(self, text):
         """Подсчет токенов в тексте"""
         encoding = tiktoken.encoding_for_model(self.GPT_MODEL)
@@ -385,23 +387,24 @@ class EmbeddingsSearch:
             search_from_inet = get_search_from_inet(user_id)
             response_parts = []
             
-            # Получаем историю поиска
-            history = get_history(user_id)
-            history_context = "\n".join([
-                f"Предыдущий вопрос: {h.search_text}\nПредыдущий ответ: {h.answer_text}"
-                for h in history
-            ])
+            query_with_history = query
             
-            # Добавляем историю в промпт
-            if history_context:
-                query_with_history = f"""
-                    История предыдущих вопросов и ответов:\n
-                    {history_context}\n\n
-                    Текущий вопрос с учетом контекста предыдущих вопросов:\n
-                    {query}
-                    """
-            else:
-                query_with_history = query
+            # Получаем историю поиска только если включено в настройках
+            if self.use_history:
+                history = get_history(user_id)
+                history_context = "\n".join([
+                    f"Предыдущий вопрос: {h.search_text}\nПредыдущий ответ: {h.answer_text}"
+                    for h in history
+                ])
+                
+                # Добавляем историю в промпт
+                if history_context:
+                    query_with_history = f"""
+                        История предыдущих вопросов и ответов:\n
+                        {history_context}\n\n
+                        Текущий вопрос с учетом контекста предыдущих вопросов:\n
+                        {query}
+                        """
             
             # Поиск в локальных документах
             index = VectorStoreIndex.from_vector_store(self.vector_store)
@@ -450,23 +453,24 @@ class EmbeddingsSearch:
             search_from_inet = get_search_from_inet(user_id)
             report_parts = []
             
-            # Получаем историю поиска
-            history = get_history(user_id)
-            history_context = "\n".join([
-                f"Предыдущий вопрос: {h.search_text}\nПредыдущий ответ: {h.answer_text}"
-                for h in history
-            ])
+            query_with_history = query
             
-            # Добавляем историю в промпт
-            if history_context:
-                query_with_history = f"""
-                    История предыдущих вопросов и ответов:\n
-                    {history_context}\n\n
-                    Текущий вопрос с учетом контекста предыдущих вопросов:\n
-                    {query}
-                    """
-            else:
-                query_with_history = query
+            # Получаем историю поиска только если включено в настройках
+            if self.use_history:
+                history = get_history(user_id)
+                history_context = "\n".join([
+                    f"Предыдущий вопрос: {h.search_text}\nПредыдущий ответ: {h.answer_text}"
+                    for h in history
+                ])
+                
+                # Добавляем историю в промпт
+                if history_context:
+                    query_with_history = f"""
+                        История предыдущих вопросов и ответов:\n
+                        {history_context}\n\n
+                        Текущий вопрос с учетом контекста предыдущих вопросов:\n
+                        {query}
+                        """
             
             # Создаем индекс для поиска в локальных документах
             index = VectorStoreIndex.from_vector_store(self.vector_store)
