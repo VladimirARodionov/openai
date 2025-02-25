@@ -12,8 +12,9 @@ COPY requirements.txt .
 # Install the dependencies
 RUN pip install -r requirements.txt
 
-# Download NLTK data before switching user
-RUN python -c "import nltk; nltk.download('stopwords'); nltk.download('punkt')"
+# Create NLTK data directory and download data
+RUN mkdir -p /usr/local/share/nltk_data && \
+    python -c "import nltk; nltk.download('stopwords', download_dir='/usr/local/share/nltk_data'); nltk.download('punkt', download_dir='/usr/local/share/nltk_data')"
 
 RUN addgroup --system app
 RUN adduser --system app --ingroup app
