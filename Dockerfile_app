@@ -3,38 +3,31 @@ FROM python:3.13-slim-bullseye
 
 # Install apt packages
 RUN apt-get update
-#RUN apt-get install --no-install-recommends -y build-essential
+# && apt-get install -y --no-install-recommends \
+#    python3-venv \
+#    && rm -rf /var/lib/apt/lists/*
 
 ENV ENVIRONMENT=PRODUCTION
-# Copy the requirements file into the container
-COPY requirements.txt .
+#ENV PYTHONDONTWRITEBYTECODE=1
+#ENV PYTHONUNBUFFERED=1
 
-# Install the dependencies
-RUN pip install -r requirements.txt
-
-# Create NLTK data directory and download data
-RUN mkdir -p /usr/local/share/nltk_data && \
-    python -c "import nltk; \
-    nltk.download('stopwords', download_dir='/usr/local/share/nltk_data'); \
-    nltk.download('punkt', download_dir='/usr/local/share/nltk_data'); \
-    nltk.download('punkt_tab', download_dir='/usr/local/share/nltk_data'); \
-    nltk.download('tokenizers', download_dir='/usr/local/share/nltk_data'); \
-    nltk.download('averaged_perceptron_tagger', download_dir='/usr/local/share/nltk_data')"
 
 RUN addgroup --system app
 RUN adduser --system app --ingroup app
 
-# Make NLTK data directory accessible to app user
-RUN chown -R app:app /usr/local/share/nltk_data
-
-# Make llama_index cache directory accessible to app user
-RUN mkdir -p /usr/local/lib/python3.13/site-packages/llama_index/core/_static/nltk_cache && \
-    chown -R app:app /usr/local/lib/python3.13/site-packages/llama_index/core/_static/nltk_cache
 
 USER app:app
-WORKDIR app
+WORKDIR /app
+
 # Copy the rest of the application's source code into the container
 COPY --chown=app:app . .
-# Set the command to run the application
-#RUN alembic upgrade head
+
+# Создаем виртуальное окружение в папке app
+RUN python -m venv venv
+ENV PATH="/app/venv/bin:$PATH"
+
+# Install the dependencies in the virtual environment
+RUN . /app/venv/bin/activate && pip install --upgrade pip && pip install -r requirements.txt
+
+# Set the command to run the application using the venv python
 CMD ["python", "bot.py"]
