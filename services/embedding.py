@@ -146,7 +146,7 @@ def _get_cluster():
         )
         return cluster
     except Exception as e:
-        logger.error(f"Ошибка подключения к Couchbase: {str(e)}")
+        logger.exception(f"Ошибка подключения к Couchbase: {str(e)}")
         # Преобразуем ошибку в более понятное сообщение
         if "unambiguous_timeout" in str(e):
             raise Exception("Превышено время ожидания подключения к базе данных документов. Пожалуйста, обратитесь к администратору.")
