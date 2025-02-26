@@ -190,3 +190,30 @@ def add_history(user_id, search_text, answer_text, is_error, search_type):
         session.rollback()
     finally:
         session.close()
+
+def get_users_paginated(page: int = 0, per_page: int = 20) -> tuple:
+    """
+    Получить список пользователей с пагинацией
+    
+    Args:
+        page: Номер страницы (начиная с 0)
+        per_page: Количество пользователей на странице
+        
+    Returns:
+        tuple: (общее количество пользователей, список пользователей на странице)
+    """
+    session = Session(db)
+    try:
+        # Получаем общее количество пользователей
+        total_count = session.query(User).count()
+        
+        # Получаем пользователей для текущей страницы
+        users = session.query(User).order_by(User.id).offset(page * per_page).limit(per_page).all()
+        
+        return total_count, users
+    except Exception:
+        logger.exception('Ошибка при получении списка пользователей')
+        session.rollback()
+        return 0, []
+    finally:
+        session.close()
