@@ -1,18 +1,19 @@
 import logging
 import asyncio
+import html
 
 from aiogram import Router, F
 from aiogram.filters import CommandStart, Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State, default_state
-from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import Message, CallbackQuery
 
 from create_bot import START_MENU_TEXT
 from filters.filter import IsAllowed, IsSuperUser
-from keyboards.inline_kb import get_inline_kb
+from keyboards.inline_kb import get_inline_kb, get_users_pagination_kb
 from keyboards.kbs import back_kb, main_kb
 from locale_config import i18n
-from services.common import add_user, delete_user, list_users, get_profile, toggle_inet, add_superusers, get_users_paginated
+from services.common import add_user, delete_user, get_profile, toggle_inet, add_superusers, get_users_paginated
 from services.embedding import EmbeddingsSearch
 
 router = Router()
@@ -99,35 +100,7 @@ async def show_users_page(message: Message, page=0, edit=False):
     text += "\n".join([f"<code><b>{user.id}</b></code> [{('@'+user.name) if user.name else ''}]" for user in users])
     
     # Создаем клавиатуру для навигации
-    keyboard = []
-    nav_row = []
-    
-    # Кнопка "Назад"
-    if page > 0:
-        nav_row.append(InlineKeyboardButton(
-            text=i18n.format_value("users_nav_prev"),
-            callback_data=f"users_page:{page-1}"
-        ))
-    
-    # Кнопка "Вперед"
-    if page < total_pages - 1:
-        nav_row.append(InlineKeyboardButton(
-            text=i18n.format_value("users_nav_next"),
-            callback_data=f"users_page:{page+1}"
-        ))
-    
-    if nav_row:
-        keyboard.append(nav_row)
-    
-    # Добавляем кнопку возврата в главное меню
-    keyboard.append([
-        InlineKeyboardButton(
-            text=i18n.format_value("users_nav_back_to_menu"),
-            callback_data="users_back_to_menu"
-        )
-    ])
-    
-    markup = InlineKeyboardMarkup(inline_keyboard=keyboard)
+    markup = get_users_pagination_kb(page, total_pages)
     
     # Отправляем или редактируем сообщение
     if edit and hasattr(message, 'edit_text'):
@@ -274,8 +247,16 @@ async def process_callback(callback_query: CallbackQuery, state: FSMContext):
             
         except Exception as e:
             logger.exception(f"Error processing request: {str(e)}")
-            await processing_msg.edit_text(i18n.format_value("error_processing_request", {"error": str(e)}))
+            # Экранируем специальные символы в тексте ошибки
+            error_text = html.escape(str(e))
+            await processing_msg.edit_text(
+                i18n.format_value("error_processing_request", {"error": error_text})
+            )
             
     except Exception as e:
         logger.exception(f"Error in callback handler: {str(e)}")
-        await callback_query.message.answer(i18n.format_value("error_in_callback", {"error": str(e)}))
+        # Экранируем специальные символы в тексте ошибки
+        error_text = html.escape(str(e))
+        await callback_query.message.answer(
+            i18n.format_value("error_in_callback", {"error": error_text})
+        )

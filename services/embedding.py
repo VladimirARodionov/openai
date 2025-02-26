@@ -131,19 +131,27 @@ def _extract_topics(text: str) -> list[str]:
         return []
 
 def _get_cluster():
-    couchbase_host = env_config.get('COUCHBASE_HOST')
-    connection_string = f"couchbase://{couchbase_host}"
-    cluster = Cluster.connect(
-    connection_string,
-    ClusterOptions(PasswordAuthenticator(env_config.get('COUCHBASE_ADMINISTRATOR_USERNAME'),
-                                         env_config.get('COUCHBASE_ADMINISTRATOR_PASSWORD')),
-                   timeout_options=ClusterTimeoutOptions(
-                       kv_timeout=timedelta(seconds=120),
-                       query_timeout=timedelta(seconds=120),
-                       search_timeout=timedelta(seconds=120)
-                   ))
-    )
-    return cluster
+    try:
+        couchbase_host = env_config.get('COUCHBASE_HOST')
+        connection_string = f"couchbase://{couchbase_host}"
+        cluster = Cluster.connect(
+            connection_string,
+            ClusterOptions(PasswordAuthenticator(env_config.get('COUCHBASE_ADMINISTRATOR_USERNAME'),
+                                             env_config.get('COUCHBASE_ADMINISTRATOR_PASSWORD')),
+                       timeout_options=ClusterTimeoutOptions(
+                           kv_timeout=timedelta(seconds=120),
+                           query_timeout=timedelta(seconds=120),
+                           search_timeout=timedelta(seconds=120)
+                       ))
+        )
+        return cluster
+    except Exception as e:
+        logger.error(f"Ошибка подключения к Couchbase: {str(e)}")
+        # Преобразуем ошибку в более понятное сообщение
+        if "unambiguous_timeout" in str(e):
+            raise Exception("Превышено время ожидания подключения к базе данных документов. Пожалуйста, обратитесь к администратору.")
+        else:
+            raise Exception(f"Ошибка подключения к базе данных: {str(e)}")
 
 def _get_vector_store(cluster):
     vector_store = CouchbaseVectorStore(
