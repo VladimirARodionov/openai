@@ -147,7 +147,7 @@ def add_superusers():
                 session.add(user)
         session.commit()
     except Exception:
-        logger.exception('Ошибка при выводе списка пользователей')
+        logger.exception('Ошибка при добавлении суперпользователей')
         session.rollback()
     finally:
         session.close()
