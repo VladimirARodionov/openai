@@ -181,15 +181,15 @@ class EmbeddingsSearch:
             model=self.GPT_MODEL,
             api_key=openai_api_key,
             max_retries=3,
-            timeout=30,
-            request_timeout=30
+            timeout=60,
+            request_timeout=60
         )
         Settings.embed_model = OpenAIEmbedding(
             model=self.EMBEDDING_MODEL,
             api_key=openai_api_key,
             max_retries=2,
-            timeout=30,
-            request_timeout=30
+            timeout=60,
+            request_timeout=60
         )
 
         self.cluster = _get_cluster()
