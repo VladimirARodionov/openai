@@ -1,5 +1,6 @@
 import logging
 import asyncio
+import html
 
 from aiogram import Router, F
 from aiogram.filters import CommandStart, Command, StateFilter
@@ -9,10 +10,10 @@ from aiogram.types import Message, CallbackQuery
 
 from create_bot import START_MENU_TEXT
 from filters.filter import IsAllowed, IsSuperUser
-from keyboards.inline_kb import get_inline_kb
+from keyboards.inline_kb import get_inline_kb, get_users_pagination_kb
 from keyboards.kbs import back_kb, main_kb
 from locale_config import i18n
-from services.common import add_user, delete_user, list_users, get_profile, toggle_inet, add_superusers
+from services.common import add_user, delete_user, get_profile, toggle_inet, add_superusers, get_users_paginated
 from services.embedding import EmbeddingsSearch
 
 router = Router()
@@ -20,6 +21,9 @@ logger = logging.getLogger(__name__)
 
 add_superusers()
 searcher = None
+
+# Константа для количества пользователей на странице
+USERS_PER_PAGE = 20
 
 def _get_searcher():
     global searcher
@@ -68,9 +72,61 @@ async def toggle_inet_user(message: Message):
 
 @router.message(F.text.endswith(i18n.format_value("show_users_text")), IsSuperUser())
 async def cmd_show_users(message: Message):
-    res = list_users()
-    await message.answer(res, reply_markup=main_kb(message.from_user.id))
+    """Показать список пользователей с пагинацией"""
+    # Получаем список пользователей и отображаем первую страницу
+    await show_users_page(message, page=0)
 
+async def show_users_page(message: Message, page=0, edit=False):
+    """Показать определенную страницу списка пользователей"""
+    # Получаем общее количество пользователей и список для текущей страницы
+    total_users, users = get_users_paginated(page, USERS_PER_PAGE)
+    
+    if not users:
+        text = i18n.format_value("show_users_text_empty")
+        if edit:
+            await message.edit_text(text, reply_markup=main_kb(message.from_user.id))
+        else:
+            await message.answer(text, reply_markup=main_kb(message.from_user.id))
+        return
+    
+    # Формируем текст сообщения
+    total_pages = (total_users - 1) // USERS_PER_PAGE + 1
+    text = i18n.format_value("show_users_page_header", {
+        "current": page + 1,
+        "total": total_pages,
+        "count": total_users
+    }) + "\n\n"
+    
+    text += "\n".join([f"<code><b>{user.id}</b></code> [{('@'+user.name) if user.name else ''}]" for user in users])
+    
+    # Создаем клавиатуру для навигации
+    markup = get_users_pagination_kb(page, total_pages)
+    
+    # Отправляем или редактируем сообщение
+    if edit and hasattr(message, 'edit_text'):
+        await message.edit_text(text, reply_markup=markup)
+    else:
+        await message.answer(text, reply_markup=markup)
+
+@router.callback_query(lambda c: c.data.startswith("users_page:"))
+async def process_users_page(callback_query: CallbackQuery):
+    """Обработка навигации по страницам пользователей"""
+    await callback_query.answer()
+    
+    # Извлекаем номер страницы из callback_data
+    page = int(callback_query.data.split(":")[1])
+    
+    # Показываем запрошенную страницу
+    await show_users_page(callback_query.message, page, edit=True)
+
+@router.callback_query(lambda c: c.data == "users_back_to_menu")
+async def process_users_back_to_menu(callback_query: CallbackQuery):
+    """Возврат в главное меню из списка пользователей"""
+    await callback_query.answer()
+    await callback_query.message.edit_text(
+        i18n.format_value("back_text"),
+        reply_markup=None
+    )
 
 @router.message(F.text.endswith(i18n.format_value("add_user_text")), IsSuperUser())
 async def cmd_add_user(message: Message, state: FSMContext):
@@ -175,7 +231,7 @@ async def process_callback(callback_query: CallbackQuery, state: FSMContext):
         user_choice = callback_query.data
         
         # Отправляем сообщение о начале обработки
-        processing_msg = await callback_query.message.answer("⏳ Подготавливаю ответ...")
+        processing_msg = await callback_query.message.answer(i18n.format_value("processing_message"))
         
         try:
             searcher = _get_searcher()
@@ -191,8 +247,16 @@ async def process_callback(callback_query: CallbackQuery, state: FSMContext):
             
         except Exception as e:
             logger.exception(f"Error processing request: {str(e)}")
-            await processing_msg.edit_text(f"Произошла ошибка при обработке запроса: {str(e)}")
+            # Экранируем специальные символы в тексте ошибки
+            error_text = html.escape(str(e))
+            await processing_msg.edit_text(
+                i18n.format_value("error_processing_request", {"error": error_text})
+            )
             
     except Exception as e:
         logger.exception(f"Error in callback handler: {str(e)}")
-        await callback_query.message.answer(f"Произошла ошибка: {str(e)}")
+        # Экранируем специальные символы в тексте ошибки
+        error_text = html.escape(str(e))
+        await callback_query.message.answer(
+            i18n.format_value("error_in_callback", {"error": error_text})
+        )

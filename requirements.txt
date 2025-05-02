@@ -2,8 +2,8 @@ aiogram
 aiohttp
 python-decouple==3.8
 openai
-SQLAlchemy==2.0.38
-alembic==1.14.1
+SQLAlchemy==2.0.39
+alembic==1.15.1
 psycopg2-binary==2.9.10
 fluent.runtime==0.4.0
 tiktoken

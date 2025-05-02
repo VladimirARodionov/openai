@@ -131,19 +131,27 @@ def _extract_topics(text: str) -> list[str]:
         return []
 
 def _get_cluster():
-    couchbase_host = env_config.get('COUCHBASE_HOST')
-    connection_string = f"couchbase://{couchbase_host}"
-    cluster = Cluster.connect(
-    connection_string,
-    ClusterOptions(PasswordAuthenticator(env_config.get('COUCHBASE_ADMINISTRATOR_USERNAME'),
-                                         env_config.get('COUCHBASE_ADMINISTRATOR_PASSWORD')),
-                   timeout_options=ClusterTimeoutOptions(
-                       kv_timeout=timedelta(seconds=120),
-                       query_timeout=timedelta(seconds=120),
-                       search_timeout=timedelta(seconds=120)
-                   ))
-    )
-    return cluster
+    try:
+        couchbase_host = env_config.get('COUCHBASE_HOST')
+        connection_string = f"couchbase://{couchbase_host}"
+        cluster = Cluster.connect(
+            connection_string,
+            ClusterOptions(PasswordAuthenticator(env_config.get('COUCHBASE_ADMINISTRATOR_USERNAME'),
+                                             env_config.get('COUCHBASE_ADMINISTRATOR_PASSWORD')),
+                       timeout_options=ClusterTimeoutOptions(
+                           kv_timeout=timedelta(seconds=120),
+                           query_timeout=timedelta(seconds=120),
+                           search_timeout=timedelta(seconds=120)
+                       ))
+        )
+        return cluster
+    except Exception as e:
+        logger.exception(f"Ошибка подключения к Couchbase: {str(e)}")
+        # Преобразуем ошибку в более понятное сообщение
+        if "unambiguous_timeout" in str(e):
+            raise Exception("Превышено время ожидания подключения к базе данных документов. Пожалуйста, обратитесь к администратору.")
+        else:
+            raise Exception(f"Ошибка подключения к базе данных: {str(e)}")
 
 def _get_vector_store(cluster):
     vector_store = CouchbaseVectorStore(
@@ -213,6 +221,8 @@ class EmbeddingsSearch:
 
         self.loading_process = None
         self.stop_loading = Event()
+
+        self.use_history = env_config.get('USE_HISTORY_IN_QUERIES', False)
 
     def num_tokens(self, text):
         """Подсчет токенов в тексте"""
@@ -385,23 +395,24 @@ class EmbeddingsSearch:
             search_from_inet = get_search_from_inet(user_id)
             response_parts = []
             
-            # Получаем историю поиска
-            history = get_history(user_id)
-            history_context = "\n".join([
-                f"Предыдущий вопрос: {h.search_text}\nПредыдущий ответ: {h.answer_text}"
-                for h in history
-            ])
+            query_with_history = query
             
-            # Добавляем историю в промпт
-            if history_context:
-                query_with_history = f"""
-                    История предыдущих вопросов и ответов:\n
-                    {history_context}\n\n
-                    Текущий вопрос с учетом контекста предыдущих вопросов:\n
-                    {query}
-                    """
-            else:
-                query_with_history = query
+            # Получаем историю поиска только если включено в настройках
+            if self.use_history:
+                history = get_history(user_id)
+                history_context = "\n".join([
+                    f"Предыдущий вопрос: {h.search_text}\nПредыдущий ответ: {h.answer_text}"
+                    for h in history
+                ])
+                
+                # Добавляем историю в промпт
+                if history_context:
+                    query_with_history = f"""
+                        История предыдущих вопросов и ответов:\n
+                        {history_context}\n\n
+                        Текущий вопрос с учетом контекста предыдущих вопросов:\n
+                        {query}
+                        """
             
             # Поиск в локальных документах
             index = VectorStoreIndex.from_vector_store(self.vector_store)
@@ -450,23 +461,24 @@ class EmbeddingsSearch:
             search_from_inet = get_search_from_inet(user_id)
             report_parts = []
             
-            # Получаем историю поиска
-            history = get_history(user_id)
-            history_context = "\n".join([
-                f"Предыдущий вопрос: {h.search_text}\nПредыдущий ответ: {h.answer_text}"
-                for h in history
-            ])
+            query_with_history = query
             
-            # Добавляем историю в промпт
-            if history_context:
-                query_with_history = f"""
-                    История предыдущих вопросов и ответов:\n
-                    {history_context}\n\n
-                    Текущий вопрос с учетом контекста предыдущих вопросов:\n
-                    {query}
-                    """
-            else:
-                query_with_history = query
+            # Получаем историю поиска только если включено в настройках
+            if self.use_history:
+                history = get_history(user_id)
+                history_context = "\n".join([
+                    f"Предыдущий вопрос: {h.search_text}\nПредыдущий ответ: {h.answer_text}"
+                    for h in history
+                ])
+                
+                # Добавляем историю в промпт
+                if history_context:
+                    query_with_history = f"""
+                        История предыдущих вопросов и ответов:\n
+                        {history_context}\n\n
+                        Текущий вопрос с учетом контекста предыдущих вопросов:\n
+                        {query}
+                        """
             
             # Создаем индекс для поиска в локальных документах
             index = VectorStoreIndex.from_vector_store(self.vector_store)
