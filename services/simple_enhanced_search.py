@@ -15,7 +15,7 @@ from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
 
 from llama_index.core import Settings, StorageContext, SimpleDirectoryReader, VectorStoreIndex
-from llama_index.core.node_parser import SentenceSplitter, SemanticSplitterNodeParser
+from llama_index.core.node_parser import SentenceSplitter
 from llama_index.core.extractors import TitleExtractor
 from llama_index.core.ingestion import IngestionPipeline
 from llama_index.core.query_engine import RetrieverQueryEngine
@@ -148,15 +148,12 @@ class SimpleEnhancedSearch:
         transformations: List[Any] = []
         
         if self.use_advanced_chunking and chunk_size is None:
-            # Семантический сплиттер - разбивает по смыслу
-            semantic_splitter = SemanticSplitterNodeParser(
-                buffer_size=1,
-                breakpoint_percentile_threshold=95,
-                embed_model=Settings.embed_model,
-            )
-            transformations.append(semantic_splitter)
-            logger.info("Используется семантический чанкинг")
-        else:
+            # Временно отключаем семантический чанкинг - может быть причиной зависания
+            logger.info("Семантический чанкинг временно отключен, используем оптимизированный обычный")
+            chunk_size = 1536  # Большой размер чанка = меньше API вызовов
+        
+        # Используем обычный сплиттер (более надежный)
+        if True:  # Всегда используем обычный сплиттер
             # Обычный сплиттер с оптимизированными параметрами
             chunk_size = chunk_size or 512
             sentence_splitter = SentenceSplitter(
@@ -168,14 +165,16 @@ class SimpleEnhancedSearch:
             transformations.append(sentence_splitter)
             logger.info(f"Используется обычный чанкинг с размером {chunk_size}")
         
-        # Добавляем экстракторы метаданных
-        if env_config.get('USE_METADATA_EXTRACTION', True):
+        # Временно отключаем экстракторы метаданных - могут вызывать дополнительные API запросы
+        if False and env_config.get('USE_METADATA_EXTRACTION', True):
             try:
                 title_extractor = TitleExtractor(nodes=3, llm=Settings.llm)
                 transformations.append(title_extractor)
                 logger.info("Добавлен экстрактор заголовков")
             except Exception as e:
                 logger.warning(f"Не удалось добавить экстрактор заголовков: {str(e)}")
+        else:
+            logger.info("Экстракторы метаданных отключены для ускорения")
         
         # Добавляем эмбеддинг модель
         transformations.append(Settings.embed_model)
@@ -685,10 +684,21 @@ class SimpleEnhancedSearch:
                 text=f"⚙️ Обрабатываем документы с {processing_method}...\n⏳ Это может занять несколько минут для больших документов."
             )
             
-            # Создаем векторный индекс напрямую из документов (минуя ноды)
+            # Сначала посмотрим, сколько чанков создается
             await bot.send_message(
                 chat_id=chat_id, 
-                text=f"🔍 Создаем векторный индекс из {len(documents)} документов..."
+                text="📊 Анализируем размер документов..."
+            )
+            
+            # Подсчитаем примерное количество чанков
+            total_chars = sum(len(doc.text) for doc in documents)
+            estimated_chunks = total_chars // 768  # Примерная оценка
+            
+            await bot.send_message(
+                chat_id=chat_id, 
+                text=f"📈 Размер документов: {total_chars} символов\n"
+                     f"🔢 Ожидаемо чанков: ~{estimated_chunks}\n"
+                     f"🔍 Создаем векторный индекс..."
             )
             
             # Проверяем подключение к Couchbase
