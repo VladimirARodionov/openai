@@ -92,7 +92,7 @@ INTERNET_REPORT_TEMPLATE = PromptTemplate(read_from_file("templates/internet_rep
 def _create_query_engine(index, top_k:int = 20):
     query_engine = CitationQueryEngine.from_args(
         index,
-        citation_chunk_size=1024,
+        citation_chunk_size=3072,
         similarity_top_k=top_k or env_config.get('SIMILARITY_TOP_K', 10),
         citation_qa_template=CITATION_QA_TEMPLATE,
         citation_refine_template=CITATION_REFINE_TEMPLATE,
