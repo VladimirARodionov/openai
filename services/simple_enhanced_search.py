@@ -6,7 +6,7 @@ import time
 from datetime import timedelta, datetime
 from pathlib import Path
 from multiprocessing import Process, Event
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import asyncio
 
 from aiogram import Bot
@@ -706,16 +706,81 @@ class SimpleEnhancedSearch:
                     text=f"⚠️ Проблема с подключением к БД: {str(e)}"
                 )
             
+            # Проверяем работу OpenAI API
+            try:
+                await bot.send_message(
+                    chat_id=chat_id, 
+                    text="🧪 Тестируем OpenAI API..."
+                )
+                
+                from llama_index.core import Settings
+                test_embedding = Settings.embed_model.get_text_embedding("Тестовый текст")
+                
+                await bot.send_message(
+                    chat_id=chat_id, 
+                    text=f"✅ OpenAI API работает (размерность: {len(test_embedding)})"
+                )
+            except Exception as e:
+                await bot.send_message(
+                    chat_id=chat_id, 
+                    text=f"❌ Проблема с OpenAI API: {str(e)}"
+                )
+                raise
+            
             # Создаем индекс напрямую из документов с пайплайном
             index_start_time = time.time()
             try:
-                # Используем from_documents с нашим пайплайном
-                index = VectorStoreIndex.from_documents(
-                    documents,
-                    storage_context=self.storage_context,
-                    transformations=pipeline.transformations,  # Используем наш улучшенный пайплайн
-                    show_progress=True
-                )
+                # Запускаем создание индекса в отдельном потоке с мониторингом
+                import threading
+                import concurrent.futures
+                
+                index_result: List[Optional[VectorStoreIndex]] = [None]
+                index_error: List[Optional[Exception]] = [None]
+                index_complete = threading.Event()
+                
+                def create_index_sync():
+                    try:
+                        logger.info("Запускаем создание векторного индекса...")
+                        index = VectorStoreIndex.from_documents(
+                            documents,
+                            storage_context=self.storage_context,
+                            transformations=pipeline.transformations,
+                            show_progress=True
+                        )
+                        index_result[0] = index
+                        logger.info("Векторный индекс успешно создан")
+                    except Exception as e:
+                        logger.exception(f"Ошибка создания индекса: {str(e)}")
+                        index_error[0] = e
+                    finally:
+                        index_complete.set()
+                
+                # Запускаем в отдельном потоке
+                thread = threading.Thread(target=create_index_sync)
+                thread.start()
+                
+                # Мониторим прогресс
+                progress_count = 0
+                while not index_complete.is_set():
+                    await asyncio.sleep(60)  # Проверяем каждую минуту
+                    if not index_complete.is_set():
+                        progress_count += 1
+                        await bot.send_message(
+                            chat_id=chat_id, 
+                            text=f"⏳ Создание индекса... ({progress_count} мин)"
+                        )
+                
+                # Ждем завершения
+                thread.join(timeout=30)
+                
+                # Проверяем результат
+                if index_error[0]:
+                    raise index_error[0]
+                
+                if index_result[0] is None:
+                    raise Exception("Не удалось создать индекс - превышен таймаут или неизвестная ошибка")
+                
+                index = index_result[0]
                 index_time = time.time() - index_start_time
                 
                 await bot.send_message(
