@@ -72,3 +72,11 @@ users_nav_back_to_menu = 🔙 В главное меню
 processing_message = ⏳ Подготавливаю ответ...
 error_processing_request = Произошла ошибка при обработке запроса: {$error}
 error_in_callback = Произошла ошибка: {$error}
+
+# Сообщения для улучшенной системы поиска
+system_info_title = 🔍 Информация о системе поиска
+enhanced_loading_started = 🚀 Начата загрузка с улучшенной обработкой
+standard_loading_started = 📁 Начата стандартная загрузка документов
+search_enhanced_mode = Используется улучшенный режим поиска
+search_query_variations = Создано вариантов запроса: {$count}
+search_best_score = Лучший результат с оценкой: {$score}

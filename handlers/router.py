@@ -14,7 +14,7 @@ from keyboards.inline_kb import get_inline_kb, get_users_pagination_kb
 from keyboards.kbs import back_kb, main_kb
 from locale_config import i18n
 from services.common import add_user, delete_user, get_profile, toggle_inet, add_superusers, get_users_paginated
-from services.embedding import EmbeddingsSearch
+from services.simple_enhanced_search import SimpleEnhancedSearch
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -28,7 +28,7 @@ USERS_PER_PAGE = 20
 def _get_searcher():
     global searcher
     if searcher is None:
-        searcher = EmbeddingsSearch()
+        searcher = SimpleEnhancedSearch()
     return searcher
 
 class FSMAddUser(StatesGroup):
@@ -168,18 +168,64 @@ async def process_delete_user(message: Message, state: FSMContext):
         await message.answer(i18n.format_value("not_success_delete_user_text"), reply_markup=main_kb(message.from_user.id))
 
 
-@router.message(Command('load_from_dir'), IsSuperUser())
-async def load_from_dir(message: Message):
-    searcher = _get_searcher()
-    response = searcher.load_documents_from_directory('load', message.from_user.id)
-    await message.answer(response, reply_markup=main_kb(message.from_user.id))
-
-
 @router.message(Command('clear_database'), IsSuperUser())
 async def clear_database(message: Message):
     searcher = _get_searcher()
     response = searcher.clear_database()
     await message.answer(response, reply_markup=main_kb(message.from_user.id))
+
+
+@router.message(Command('system_info'), IsSuperUser())
+async def system_info(message: Message):
+    """Показать информацию о системе поиска"""
+    try:
+        searcher = _get_searcher()
+        info = searcher.get_system_info()
+        
+        text = "🔍 <b>Информация о системе поиска:</b>\n\n"
+        text += f"📊 <b>Модель эмбеддингов:</b> {info['embedding_model']}\n"
+        text += f"🤖 <b>GPT модель:</b> {info['gpt_model']}\n"
+        text += f"📚 <b>Документов в базе:</b> {info['document_count']}\n\n"
+        
+        text += "<b>⚙️ Настройки:</b>\n"
+        text += f"• Семантический чанкинг: {'✅' if info['advanced_chunking'] else '❌'}\n"
+        text += f"• Улучшение запросов: {'✅' if info['query_enhancement'] else '❌'}\n"
+        text += f"• История запросов: {'✅' if info['history_enabled'] else '❌'}\n\n"
+        
+        text += f"🗄️ <b>Векторное хранилище:</b>\n"
+        text += f"• Bucket: {info['vector_store']['bucket_name']}\n"
+        text += f"• Collection: {info['vector_store']['collection_name']}\n"
+        text += f"• Index: {info['vector_store']['index_name']}"
+        
+        await message.answer(text, reply_markup=main_kb(message.from_user.id))
+        
+    except Exception as e:
+        logger.exception(f"Ошибка при получении информации о системе: {str(e)}")
+        await message.answer(f"❌ Ошибка: {str(e)}", reply_markup=main_kb(message.from_user.id))
+
+
+@router.message(Command('load_advanced'), IsSuperUser())
+async def load_advanced(message: Message):
+    """Загрузить документы с улучшенной обработкой"""
+    try:
+        searcher = _get_searcher()
+        response = searcher.load_documents_from_directory('load', str(message.from_user.id), chunk_size=None)
+        await message.answer(f"🚀 {response}", reply_markup=main_kb(message.from_user.id))
+    except Exception as e:
+        logger.exception(f"Ошибка при загрузке документов: {str(e)}")
+        await message.answer(f"❌ Ошибка: {str(e)}", reply_markup=main_kb(message.from_user.id))
+
+
+@router.message(Command('load_standard'), IsSuperUser())
+async def load_standard(message: Message):
+    """Загрузить документы со стандартной обработкой"""
+    try:
+        searcher = _get_searcher()
+        response = searcher.load_documents_from_directory('load', str(message.from_user.id), chunk_size=512)
+        await message.answer(f"📁 {response}", reply_markup=main_kb(message.from_user.id))
+    except Exception as e:
+        logger.exception(f"Ошибка при загрузке документов: {str(e)}")
+        await message.answer(f"❌ Ошибка: {str(e)}", reply_markup=main_kb(message.from_user.id))
 
 
 @router.message(F.text, IsAllowed(), StateFilter(default_state))
@@ -236,10 +282,10 @@ async def process_callback(callback_query: CallbackQuery, state: FSMContext):
         try:
             searcher = _get_searcher()
             if user_choice == "simple_response":
-                response = searcher.ask(msg, callback_query.from_user.id, True)
+                response = searcher.ask(msg, str(callback_query.from_user.id), True)
                 await print_parts(response, callback_query)
             elif user_choice == "detailed_report":
-                response = searcher.report(msg, callback_query.from_user.id, True)
+                response = searcher.report(msg, str(callback_query.from_user.id), True)
                 await print_parts(response, callback_query)
             
             # Удаляем сообщение о подготовке ответа

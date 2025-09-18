@@ -11,6 +11,10 @@ python-docx
 PyPDF2
 llama-index
 llama-index-vector-stores-couchbase
+llama-index-retrievers-bm25
+sentence-transformers
+numpy
+scikit-learn
 couchbase
 # Для работы с различными форматами файлов
 #unstructured[all-docs]
