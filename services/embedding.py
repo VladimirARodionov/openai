@@ -24,6 +24,7 @@ from couchbase.cluster import Cluster
 from couchbase.options import ClusterOptions, ClusterTimeoutOptions
 from llama_index.llms.openai import OpenAI
 from llama_index.core.prompts import ChatPromptTemplate
+from couchbase.exceptions import InternalServerFailureException, TimeoutException
 
 from create_bot import env_config
 from locale_config import i18n
@@ -101,6 +102,77 @@ def _create_query_engine(index, top_k:int = 20):
     return query_engine
 
 
+def _retry_vector_operation(operation_func, max_retries=3, base_delay=1.0):
+    """
+    Выполняет операцию с векторным индексом с повторными попытками при ошибках
+    
+    Args:
+        operation_func: Функция для выполнения
+        max_retries: Максимальное количество попыток
+        base_delay: Базовая задержка между попытками (в секундах)
+    
+    Returns:
+        Результат выполнения operation_func
+    
+    Raises:
+        Exception: Если все попытки исчерпаны
+    """
+    last_exception = None
+    
+    for attempt in range(max_retries + 1):
+        try:
+            return operation_func()
+        except InternalServerFailureException as e:
+            last_exception = e
+            error_msg = str(e)
+            
+            # Проверяем на HTTP 429 (Too Many Requests)
+            if "429" in error_msg or "query request rejected" in error_msg:
+                if attempt < max_retries:
+                    delay = base_delay * (2 ** attempt)  # Экспоненциальная задержка
+                    logger.warning(f"Vector search rate limited (attempt {attempt + 1}/{max_retries + 1}). "
+                                 f"Waiting {delay} seconds before retry. Error: {error_msg}")
+                    time.sleep(delay)
+                    continue
+                else:
+                    logger.error(f"Vector search failed after {max_retries + 1} attempts due to rate limiting")
+                    raise Exception("Векторный поиск временно недоступен из-за высокой нагрузки. Попробуйте позже.")
+            else:
+                # Для других InternalServerFailureException тоже делаем retry, но с меньшей задержкой
+                if attempt < max_retries:
+                    delay = base_delay * (1.5 ** attempt)
+                    logger.warning(f"Vector search internal error (attempt {attempt + 1}/{max_retries + 1}). "
+                                 f"Waiting {delay} seconds before retry. Error: {error_msg}")
+                    time.sleep(delay)
+                    continue
+                else:
+                    logger.error(f"Vector search failed after {max_retries + 1} attempts: {error_msg}")
+                    raise Exception("Векторный поиск временно недоступен. Попробуйте позже.")
+        
+        except TimeoutException as e:
+            last_exception = e
+            if attempt < max_retries:
+                delay = base_delay * (1.2 ** attempt)
+                logger.warning(f"Vector search timeout (attempt {attempt + 1}/{max_retries + 1}). "
+                             f"Waiting {delay} seconds before retry.")
+                time.sleep(delay)
+                continue
+            else:
+                logger.error(f"Vector search timed out after {max_retries + 1} attempts")
+                raise Exception("Превышено время ожидания векторного поиска. Попробуйте позже.")
+        
+        except Exception as e:
+            # Для других исключений не делаем retry
+            logger.error(f"Vector search failed with non-retryable error: {str(e)}")
+            raise
+    
+    # Если дошли сюда, значит все попытки исчерпаны
+    if last_exception:
+        raise last_exception
+    else:
+        raise Exception("Неожиданная ошибка в retry логике")
+
+
 def _extract_topics(text: str) -> list[str]:
     """Извлечение основных тем из текста
 
@@ -139,9 +211,9 @@ def _get_cluster():
             ClusterOptions(PasswordAuthenticator(env_config.get('COUCHBASE_ADMINISTRATOR_USERNAME'),
                                              env_config.get('COUCHBASE_ADMINISTRATOR_PASSWORD')),
                        timeout_options=ClusterTimeoutOptions(
-                           kv_timeout=timedelta(seconds=120),
-                           query_timeout=timedelta(seconds=120),
-                           search_timeout=timedelta(seconds=120)
+                           kv_timeout=timedelta(seconds=60),
+                           query_timeout=timedelta(seconds=90),
+                           search_timeout=timedelta(seconds=90)
                        ))
         )
         return cluster
@@ -414,10 +486,14 @@ class EmbeddingsSearch:
                         {query}
                         """
             
-            # Поиск в локальных документах
+            # Поиск в локальных документах с retry логикой
             index = VectorStoreIndex.from_vector_store(self.vector_store)
-            query_engine = _create_query_engine(index)
-            local_response = query_engine.query(query_with_history)
+            
+            def query_local():
+                query_engine = _create_query_engine(index)
+                return query_engine.query(query_with_history)
+            
+            local_response = _retry_vector_operation(query_local, max_retries=3, base_delay=1.0)
             response_parts.append(str(local_response))
             
             # Поиск в интернете через GPT, если включен
@@ -450,8 +526,42 @@ class EmbeddingsSearch:
             
         except Exception as e:
             logger.exception(str(e))
-            error_response = i18n.format_value('search_error', {'error': str(e)})
-            # Сохраняем ошибку в историю
+            error_msg = str(e)
+            
+            # Проверяем, является ли это ошибкой векторного поиска
+            if ("векторный поиск" in error_msg.lower() or 
+                "vector search" in error_msg.lower() or
+                "query request rejected" in error_msg.lower() or
+                "429" in error_msg):
+                
+                # Пытаемся предоставить альтернативный ответ через интернет-поиск
+                if get_search_from_inet(user_id):
+                    try:
+                        logger.info("Векторный поиск недоступен, используем только интернет-поиск")
+                        internet_response = Settings.llm.complete(
+                            INTERNET_QA_TEMPLATE.format(
+                                query_str=query,
+                                local_response="Локальный поиск временно недоступен"
+                            )
+                        )
+                        
+                        fallback_response = (
+                            i18n.format_value('search_vector_unavailable') + "\n\n" +
+                            i18n.format_value('search_internet_title') + str(internet_response)
+                        )
+                        
+                        add_history(user_id, query, fallback_response, False, "simple_response_fallback")
+                        return fallback_response
+                        
+                    except Exception as internet_e:
+                        logger.exception(f"Fallback internet search also failed: {str(internet_e)}")
+                
+                # Если интернет поиск тоже не работает или отключен
+                error_response = i18n.format_value('search_vector_unavailable_no_fallback')
+            else:
+                # Для других ошибок используем общее сообщение
+                error_response = i18n.format_value('search_error', {'error': error_msg})
+            
             add_history(user_id, query, error_response, True, "simple_response")
             return error_response
 
@@ -483,13 +593,19 @@ class EmbeddingsSearch:
             # Создаем индекс для поиска в локальных документах
             index = VectorStoreIndex.from_vector_store(self.vector_store)
             
-            # Получаем релевантные ноды с метаданными
-            retriever = index.as_retriever(similarity_top_k=10)
-            nodes = retriever.retrieve(query_with_history)
+            # Получаем релевантные ноды с метаданными с retry логикой
+            def retrieve_nodes():
+                retriever = index.as_retriever(similarity_top_k=10)
+                return retriever.retrieve(query_with_history)
             
-            # 1. Основной ответ из локальных документов
-            query_engine = _create_query_engine(index)
-            main_response = query_engine.query(query_with_history)
+            nodes = _retry_vector_operation(retrieve_nodes, max_retries=3, base_delay=1.0)
+            
+            # 1. Основной ответ из локальных документов с retry логикой
+            def query_documents():
+                query_engine = _create_query_engine(index)
+                return query_engine.query(query_with_history)
+            
+            main_response = _retry_vector_operation(query_documents, max_retries=3, base_delay=1.0)
             report_parts.append(i18n.format_value('search_local_title') + '\n' + str(main_response) + '\n')
             
             # 2. Краткое саммари локальных документов
@@ -547,8 +663,42 @@ class EmbeddingsSearch:
             
         except Exception as e:
             logger.exception(str(e))
-            error_response = i18n.format_value('search_report_error', {'error': str(e)})
-            # Сохраняем ошибку в историю
+            error_msg = str(e)
+            
+            # Проверяем, является ли это ошибкой векторного поиска
+            if ("векторный поиск" in error_msg.lower() or 
+                "vector search" in error_msg.lower() or
+                "query request rejected" in error_msg.lower() or
+                "429" in error_msg):
+                
+                # Пытаемся предоставить альтернативный ответ через интернет-поиск
+                if get_search_from_inet(user_id):
+                    try:
+                        logger.info("Векторный поиск недоступен, используем только интернет-поиск")
+                        internet_response = Settings.llm.complete(
+                            INTERNET_REPORT_TEMPLATE.format(
+                                query_str=query,
+                                local_response="Локальный поиск временно недоступен"
+                            )
+                        )
+                        
+                        fallback_response = (
+                            i18n.format_value('search_vector_unavailable') + "\n\n" +
+                            i18n.format_value('search_internet_title') + str(internet_response)
+                        )
+                        
+                        add_history(user_id, query, fallback_response, False, "detailed_report_fallback")
+                        return fallback_response
+                        
+                    except Exception as internet_e:
+                        logger.exception(f"Fallback internet search also failed: {str(internet_e)}")
+                
+                # Если интернет поиск тоже не работает или отключен
+                error_response = i18n.format_value('search_vector_unavailable_no_fallback')
+            else:
+                # Для других ошибок используем общее сообщение
+                error_response = i18n.format_value('search_report_error', {'error': error_msg})
+            
             add_history(user_id, query, error_response, True, "detailed_report")
             return error_response
 
