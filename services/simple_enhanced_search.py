@@ -6,7 +6,7 @@ import time
 from datetime import timedelta, datetime
 from pathlib import Path
 from multiprocessing import Process, Event
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 import asyncio
 
 from aiogram import Bot
@@ -16,7 +16,6 @@ from aiogram.enums import ParseMode
 
 from llama_index.core import Settings, StorageContext, SimpleDirectoryReader, VectorStoreIndex
 from llama_index.core.node_parser import SentenceSplitter
-from llama_index.core.extractors import TitleExtractor
 from llama_index.core.ingestion import IngestionPipeline
 from llama_index.core.query_engine import RetrieverQueryEngine
 from llama_index.core.retrievers import VectorIndexRetriever
@@ -147,34 +146,16 @@ class SimpleEnhancedSearch:
         """
         transformations: List[Any] = []
         
-        if self.use_advanced_chunking and chunk_size is None:
-            # Временно отключаем семантический чанкинг - может быть причиной зависания
-            logger.info("Семантический чанкинг временно отключен, используем оптимизированный обычный")
-            chunk_size = 1536  # Большой размер чанка = меньше API вызовов
-        
-        # Используем обычный сплиттер (более надежный)
-        if True:  # Всегда используем обычный сплиттер
-            # Обычный сплиттер с оптимизированными параметрами
-            chunk_size = chunk_size or 512
-            sentence_splitter = SentenceSplitter(
-                chunk_size=chunk_size,
-                chunk_overlap=int(chunk_size * 0.1),  # 10% перекрытия
-                paragraph_separator="\n\n",
-                secondary_chunking_regex="[^,.;。]+[,.;。]?"
-            )
-            transformations.append(sentence_splitter)
-            logger.info(f"Используется обычный чанкинг с размером {chunk_size}")
-        
-        # Временно отключаем экстракторы метаданных - могут вызывать дополнительные API запросы
-        if False and env_config.get('USE_METADATA_EXTRACTION', True):
-            try:
-                title_extractor = TitleExtractor(nodes=3, llm=Settings.llm)
-                transformations.append(title_extractor)
-                logger.info("Добавлен экстрактор заголовков")
-            except Exception as e:
-                logger.warning(f"Не удалось добавить экстрактор заголовков: {str(e)}")
-        else:
-            logger.info("Экстракторы метаданных отключены для ускорения")
+        # Обычный сплиттер с оптимизированными параметрами
+        chunk_size = chunk_size or 512
+        sentence_splitter = SentenceSplitter(
+            chunk_size=chunk_size,
+            chunk_overlap=int(chunk_size * 0.1),  # 10% перекрытия
+            paragraph_separator="\n\n",
+            secondary_chunking_regex="[^,.;。]+[,.;。]?"
+        )
+        transformations.append(sentence_splitter)
+        logger.info(f"Используется обычный чанкинг с размером {chunk_size}")
         
         # Добавляем эмбеддинг модель
         transformations.append(Settings.embed_model)
@@ -684,133 +665,20 @@ class SimpleEnhancedSearch:
                 text=f"⚙️ Обрабатываем документы с {processing_method}...\n⏳ Это может занять несколько минут для больших документов."
             )
             
-            # Сначала посмотрим, сколько чанков создается
-            await bot.send_message(
-                chat_id=chat_id, 
-                text="📊 Анализируем размер документов..."
+            # Создаем индекс из документов (простой подход)
+            logger.info("Создаем индекс из документов целиком")
+            index = VectorStoreIndex.from_documents(
+                documents,
+                storage_context=self.storage_context,
+                show_progress=True
             )
-            
-            # Подсчитаем примерное количество чанков
-            total_chars = sum(len(doc.text) for doc in documents)
-            estimated_chunks = total_chars // 768  # Примерная оценка
-            
-            await bot.send_message(
-                chat_id=chat_id, 
-                text=f"📈 Размер документов: {total_chars} символов\n"
-                     f"🔢 Ожидаемо чанков: ~{estimated_chunks}\n"
-                     f"🔍 Создаем векторный индекс..."
-            )
-            
-            # Проверяем подключение к Couchbase
-            try:
-                # Простая проверка подключения
-                bucket = self.cluster.bucket("vector_store")
-                collection = bucket.default_collection()
-                await bot.send_message(
-                    chat_id=chat_id, 
-                    text="✅ Подключение к базе данных проверено"
-                )
-            except Exception as e:
-                await bot.send_message(
-                    chat_id=chat_id, 
-                    text=f"⚠️ Проблема с подключением к БД: {str(e)}"
-                )
-            
-            # Проверяем работу OpenAI API
-            try:
-                await bot.send_message(
-                    chat_id=chat_id, 
-                    text="🧪 Тестируем OpenAI API..."
-                )
-                
-                from llama_index.core import Settings
-                test_embedding = Settings.embed_model.get_text_embedding("Тестовый текст")
-                
-                await bot.send_message(
-                    chat_id=chat_id, 
-                    text=f"✅ OpenAI API работает (размерность: {len(test_embedding)})"
-                )
-            except Exception as e:
-                await bot.send_message(
-                    chat_id=chat_id, 
-                    text=f"❌ Проблема с OpenAI API: {str(e)}"
-                )
-                raise
-            
-            # Создаем индекс напрямую из документов с пайплайном
-            index_start_time = time.time()
-            try:
-                # Запускаем создание индекса в отдельном потоке с мониторингом
-                import threading
-                import concurrent.futures
-                
-                index_result: List[Optional[VectorStoreIndex]] = [None]
-                index_error: List[Optional[Exception]] = [None]
-                index_complete = threading.Event()
-                
-                def create_index_sync():
-                    try:
-                        logger.info("Запускаем создание векторного индекса...")
-                        index = VectorStoreIndex.from_documents(
-                            documents,
-                            storage_context=self.storage_context,
-                            transformations=pipeline.transformations,
-                            show_progress=True
-                        )
-                        index_result[0] = index
-                        logger.info("Векторный индекс успешно создан")
-                    except Exception as e:
-                        logger.exception(f"Ошибка создания индекса: {str(e)}")
-                        index_error[0] = e
-                    finally:
-                        index_complete.set()
-                
-                # Запускаем в отдельном потоке
-                thread = threading.Thread(target=create_index_sync)
-                thread.start()
-                
-                # Мониторим прогресс
-                progress_count = 0
-                while not index_complete.is_set():
-                    await asyncio.sleep(60)  # Проверяем каждую минуту
-                    if not index_complete.is_set():
-                        progress_count += 1
-                        await bot.send_message(
-                            chat_id=chat_id, 
-                            text=f"⏳ Создание индекса... ({progress_count} мин)"
-                        )
-                
-                # Ждем завершения
-                thread.join(timeout=30)
-                
-                # Проверяем результат
-                if index_error[0]:
-                    raise index_error[0]
-                
-                if index_result[0] is None:
-                    raise Exception("Не удалось создать индекс - превышен таймаут или неизвестная ошибка")
-                
-                index = index_result[0]
-                index_time = time.time() - index_start_time
-                
-                await bot.send_message(
-                    chat_id=chat_id, 
-                    text=f"✅ Векторный индекс создан за {index_time:.1f} сек."
-                )
-            except Exception as e:
-                await bot.send_message(
-                    chat_id=chat_id, 
-                    text=f"❌ Ошибка при создании индекса: {str(e)}"
-                )
-                raise
             
             file_count = len(documents)
+            logger.info(f"Обработано файлов: {file_count}")
             
             result_message = (
                 "🎉 " + i18n.format_value('loading_complete') + '\n' +
-                i18n.format_value('loading_files_count', {'count': file_count}) + '\n' +
-                f"🔧 Метод: {'семантический' if (self.use_advanced_chunking and chunk_size is None) else 'стандартный'} чанкинг\n" +
-                f"⏱️ Время создания индекса: {index_time:.1f} сек."
+                i18n.format_value('loading_files_count', {'count': file_count})
             )
             
             await bot.send_message(chat_id=chat_id, text=result_message)
