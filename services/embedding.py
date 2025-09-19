@@ -7,6 +7,7 @@ from multiprocessing import Process, Event
 
 import openai
 import tiktoken
+from services.deepseek_client import DeepSeekLLM, DeepSeekEmbedding
 from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
@@ -91,10 +92,21 @@ INTERNET_QA_TEMPLATE = PromptTemplate(read_from_file("templates/internet_qa_temp
 INTERNET_REPORT_TEMPLATE = PromptTemplate(read_from_file("templates/internet_report_template.txt"))
 
 def _create_query_engine(index, top_k:int = 20):
+    # Для DeepSeek используем меньший размер чанка и меньше документов
+    use_deepseek = env_config.get('USE_DEEPSEEK', 'true').lower() == 'true'
+    
+    if use_deepseek:
+        # DeepSeek теперь поддерживает большое контекстное окно 32768 токенов
+        chunk_size = 4096  # Увеличиваем размер чанка
+        top_k_limit = min(top_k or env_config.get('SIMILARITY_TOP_K', 10), 10)  # Максимум 10 документов
+    else:
+        chunk_size = 3072
+        top_k_limit = top_k or env_config.get('SIMILARITY_TOP_K', 10)
+    
     query_engine = CitationQueryEngine.from_args(
         index,
-        citation_chunk_size=3072,
-        similarity_top_k=top_k or env_config.get('SIMILARITY_TOP_K', 10),
+        citation_chunk_size=chunk_size,
+        similarity_top_k=top_k_limit,
         citation_qa_template=CITATION_QA_TEMPLATE,
         citation_refine_template=CITATION_REFINE_TEMPLATE,
         response_mode=ResponseMode.COMPACT
@@ -211,9 +223,10 @@ def _get_cluster():
             ClusterOptions(PasswordAuthenticator(env_config.get('COUCHBASE_ADMINISTRATOR_USERNAME'),
                                              env_config.get('COUCHBASE_ADMINISTRATOR_PASSWORD')),
                        timeout_options=ClusterTimeoutOptions(
-                           kv_timeout=timedelta(seconds=60),
-                           query_timeout=timedelta(seconds=90),
-                           search_timeout=timedelta(seconds=90)
+                           kv_timeout=timedelta(seconds=120),      # Увеличили таймауты
+                           query_timeout=timedelta(seconds=180),   # для стабильности
+                           search_timeout=timedelta(seconds=180),  # подключения
+                           connect_timeout=timedelta(seconds=120) # к Couchbase
                        ))
         )
         return cluster
@@ -226,69 +239,111 @@ def _get_cluster():
             raise Exception(f"Ошибка подключения к базе данных: {str(e)}")
 
 def _get_vector_store(cluster):
-    vector_store = CouchbaseVectorStore(
-        cluster=cluster,
-        bucket_name="vector_store",
-        scope_name="_default",
-        collection_name="_default",
-        index_name="vector-index"
-    )
-    logger.info("Vector store initialized successfully")
-    return vector_store
+    try:
+        vector_store = CouchbaseVectorStore(
+            cluster=cluster,
+            bucket_name="vector_store",
+            scope_name="_default",
+            collection_name="_default",
+            index_name="vector-index"
+        )
+        logger.info("Vector store initialized successfully")
+        return vector_store
+    except Exception as e:
+        logger.warning(f"Ошибка создания vector store (возможно, индекс еще создается): {str(e)}")
+        # Возвращаем None - приложение сможет работать без векторного поиска
+        return None
 
 
 class EmbeddingsSearch:
     def __init__(self):
         """Инициализация с API ключом OpenAI и подключением к Couchbase"""
-        self.EMBEDDING_MODEL = env_config.get('EMBEDDING_MODEL')
-        self.GPT_MODEL = env_config.get('MODEL')
+        # Проверяем режим работы
+        use_deepseek = env_config.get('USE_DEEPSEEK', 'true').lower() == 'true'
         
-        # Устанавливаем API ключ OpenAI
-        openai_api_key = env_config.get('OPEN_AI_TOKEN')
-        if not openai_api_key:
-            raise ValueError("OpenAI API key not found in environment variables")
+        # Устанавливаем модели по умолчанию в зависимости от режима
+        if use_deepseek:
+            self.EMBEDDING_MODEL = env_config.get('EMBEDDING_MODEL', 'nomic-embed-text')
+            self.GPT_MODEL = env_config.get('MODEL', 'deepseek-r1:8b')
+        else:
+            self.EMBEDDING_MODEL = env_config.get('EMBEDDING_MODEL', 'text-embedding-3-small')
+            self.GPT_MODEL = env_config.get('MODEL', 'gpt-4o-mini')
         
-        # Инициализация llama-index settings с API ключом
-        Settings.llm = OpenAI(
-            model=self.GPT_MODEL,
-            api_key=openai_api_key,
-            max_retries=3,
-            timeout=60,
-            request_timeout=60
-        )
-        Settings.embed_model = OpenAIEmbedding(
-            model=self.EMBEDDING_MODEL,
-            api_key=openai_api_key,
-            max_retries=2,
-            timeout=60,
-            request_timeout=60
-        )
+        # Проверяем API ключ для OpenAI если нужно
+        if not use_deepseek:
+            openai_api_key = env_config.get('OPEN_AI_TOKEN')
+            if not openai_api_key:
+                raise ValueError("OpenAI API key not found in environment variables")
+        else:
+            openai_api_key = "dummy"  # Заглушка для DeepSeek
+        
+        # Инициализация llama-index settings с DeepSeek или OpenAI
+        
+        if use_deepseek:
+            logger.info("Используем DeepSeek LLM и эмбеддинги")
+            Settings.llm = DeepSeekLLM(
+                model=env_config.get('DEEPSEEK_MODEL', 'deepseek-r1:8b'),
+                base_url=env_config.get('DEEPSEEK_BASE_URL', 'http://deepseek:11434')
+            )
+            Settings.embed_model = DeepSeekEmbedding(
+                model=env_config.get('DEEPSEEK_EMBED_MODEL', 'nomic-embed-text'),
+                base_url=env_config.get('DEEPSEEK_BASE_URL', 'http://deepseek:11434')
+            )
+        else:
+            logger.info("Используем OpenAI LLM и эмбеддинги")
+            Settings.llm = OpenAI(
+                model=self.GPT_MODEL,
+                api_key=openai_api_key,
+                max_retries=3,
+                timeout=60,
+                request_timeout=60
+            )
+            Settings.embed_model = OpenAIEmbedding(
+                model=self.EMBEDDING_MODEL,
+                api_key=openai_api_key,
+                max_retries=2,
+                timeout=60,
+                request_timeout=60
+            )
 
         self.cluster = _get_cluster()
         
         try:
-            # Проверяем доступные индексы
-            mgr = self.cluster.search_indexes()
-            indexes = mgr.get_all_indexes()
-            logger.info(f"Available indexes: {[idx.name for idx in indexes]}")
+            # Проверяем доступные индексы с обработкой ошибок
+            try:
+                mgr = self.cluster.search_indexes()
+                indexes = mgr.get_all_indexes()
+                logger.info(f"Available indexes: {[idx.name for idx in indexes]}")
+            except Exception as idx_error:
+                logger.warning(f"Не удалось получить FTS индексы (возможно, еще создаются): {str(idx_error)}")
+                indexes = []
             
             # Проверяем GSI индексы
-            result = self.cluster.query(
-                "SELECT * FROM system:indexes;"
-            )
-            gsi_indexes = [row for row in result]
-            logger.info(f"Available GSI indexes in _default scope: {gsi_indexes}")
+            try:
+                result = self.cluster.query(
+                    "SELECT * FROM system:indexes;"
+                )
+                gsi_indexes = [row for row in result]
+                logger.info(f"Available GSI indexes in _default scope: {gsi_indexes}")
+            except Exception as gsi_error:
+                logger.warning(f"Не удалось получить GSI индексы: {str(gsi_error)}")
             
             # Создаем векторное хранилище
             self.vector_store = _get_vector_store(self.cluster)
+            if self.vector_store is None:
+                logger.warning("Vector store не инициализирован - векторный поиск будет недоступен")
         except Exception as e:
             logger.error(f"Error initializing vector store: {str(e)}")
             raise
         
         # Инициализация storage context
-        self.storage_context = StorageContext.from_defaults(
-            vector_store=self.vector_store
-        )
+        if self.vector_store is not None:
+            self.storage_context = StorageContext.from_defaults(
+                vector_store=self.vector_store
+            )
+        else:
+            self.storage_context = None
+            logger.warning("Storage context не создан - векторный поиск недоступен")
         self.node_parser = SimpleNodeParser.from_defaults()
 
         self.loading_process = None
@@ -494,7 +549,16 @@ class EmbeddingsSearch:
                 return query_engine.query(query_with_history)
             
             local_response = _retry_vector_operation(query_local, max_retries=3, base_delay=1.0)
-            response_parts.append(str(local_response))
+            
+            # Диагностика ответа
+            logger.info(f"Local response type: {type(local_response)}")
+            logger.info(f"Local response content: {str(local_response)[:200]}...")
+            
+            if not str(local_response).strip() or str(local_response).strip() == "Empty Response":
+                logger.warning("Получен пустой ответ от DeepSeek, добавляем сообщение об отсутствии информации")
+                response_parts.append("Не могу найти ответ в предоставленных документах.")
+            else:
+                response_parts.append(str(local_response))
             
             # Поиск в интернете через GPT, если включен
             if search_from_inet:

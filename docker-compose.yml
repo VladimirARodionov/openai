@@ -43,6 +43,25 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+  deepseek:
+    build:
+      dockerfile: Dockerfile_deepseek
+    ports:
+      - "11434:11434"
+    volumes:
+      - deepseek_data:/root/.ollama
+    restart: always
+    environment:
+      - TZ=${TZ}
+      - DEEPSEEK_MODEL=${DEEPSEEK_MODEL:-deepseek-r1:8b}
+      - DEEPSEEK_EMBED_MODEL=${DEEPSEEK_EMBED_MODEL:-nomic-embed-text}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:11434/api/tags || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
   openaiapp :
     build:
       dockerfile: Dockerfile_app
@@ -50,6 +69,18 @@ services:
       - .env
     environment:
       - TZ=${TZ}
+      # DeepSeek configuration
+      - USE_DEEPSEEK=true
+      - DEEPSEEK_BASE_URL=${DEEPSEEK_BASE_URL:-http://deepseek:11434}
+      - DEEPSEEK_MODEL=${DEEPSEEK_MODEL:-deepseek-r1:8b}
+      - DEEPSEEK_EMBED_MODEL=${DEEPSEEK_EMBED_MODEL:-nomic-embed-text}
+      # Default models for fallback
+      - MODEL=${MODEL:-deepseek-r1:8b}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-nomic-embed-text}
+      # Couchbase connection
+      - COUCHBASE_HOST=couchbase
+      - COUCHBASE_ADMINISTRATOR_USERNAME=${COUCHBASE_ADMINISTRATOR_USERNAME:-admin}
+      - COUCHBASE_ADMINISTRATOR_PASSWORD=${COUCHBASE_ADMINISTRATOR_PASSWORD:-password}
     volumes:
       - ./logs:/app/logs
       - ./load:/app/load
@@ -60,8 +91,11 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+      deepseek:
+        condition: service_healthy
 
 volumes:
   couchbase_data:
   couchbase_init:
   postgres_data:
+  deepseek_data:

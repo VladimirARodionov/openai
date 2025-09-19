@@ -196,6 +196,13 @@ async def chat_with_gpt_again(message, state: FSMContext):
     await message.reply(i18n.format_value("response_format_text"), reply_markup=get_inline_kb())
 
 async def print_parts(response:str, callback_query: CallbackQuery):
+    # Обрабатываем теги <think> для корректного отображения в Telegram
+    import re
+    
+    # Заменяем теги <think> на читаемый формат
+    response = re.sub(r'<think>', '🤔 **Размышления:**\n', response)
+    response = re.sub(r'</think>', '\n\n💡 **Ответ:**', response)
+    
     # Разбиваем отчет на части по маркерам
     parts = response.split("\n\n")
 

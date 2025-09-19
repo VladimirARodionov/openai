@@ -198,7 +198,7 @@ curl -X PUT -u ${COUCHBASE_ADMINISTRATOR_USERNAME}:${COUCHBASE_ADMINISTRATOR_PAS
             "dynamic": false,
             "fields": [
              {
-              "dims": 3072,
+              "dims": 768,
               "index": true,
               "name": "embedding",
               "similarity": "dot_product",

@@ -2,6 +2,8 @@ aiogram
 aiohttp
 python-decouple==3.8
 openai
+httpx
+requests
 SQLAlchemy==2.0.39
 alembic==1.15.1
 psycopg2-binary==2.9.10
@@ -9,8 +11,8 @@ fluent.runtime==0.4.0
 tiktoken
 python-docx
 PyPDF2
-llama-index
-llama-index-vector-stores-couchbase
+llama-index==0.14.2
+llama-index-vector-stores-couchbase==0.5.1
 couchbase
 # Для работы с различными форматами файлов
 #unstructured[all-docs]

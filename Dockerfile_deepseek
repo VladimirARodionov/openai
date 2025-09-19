@@ -1,0 +1,19 @@
+# Dockerfile для DeepSeek с Ollama
+FROM ollama/ollama:latest
+
+# Установка curl для healthcheck
+RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+
+# Создание рабочей директории
+WORKDIR /app
+
+# Копирование скрипта инициализации
+COPY init-scripts/deepseek/init_deepseek.sh /app/init_deepseek.sh
+RUN chmod +x /app/init_deepseek.sh
+
+# Экспонирование порта Ollama API
+EXPOSE 11434
+
+# Переопределяем ENTRYPOINT и CMD для запуска нашего скрипта
+ENTRYPOINT []
+CMD ["/app/init_deepseek.sh"]
