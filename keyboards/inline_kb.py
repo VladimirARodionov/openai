@@ -14,6 +14,16 @@ def get_inline_kb():
                 text=i18n.format_value("detailed_report_menu"),
                 callback_data="detailed_report"
             )
+        ],
+        [
+            InlineKeyboardButton(
+                text="🧠 Семантический поиск",
+                callback_data="semantic_search"
+            ),
+            InlineKeyboardButton(
+                text="🎯 Поиск с кластеризацией",
+                callback_data="semantic_cluster"
+            )
         ]
     ]
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)

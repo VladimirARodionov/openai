@@ -51,8 +51,7 @@ class DeepSeekClient:
                     "num_predict": kwargs.get("max_tokens", 20480),  # Увеличиваем лимит токенов
                     "stop": [],  # Убираем стоп-слова
                     "repeat_penalty": 1.1,  # Против повторений
-                    "seed": -1,  # Случайность
-                    "penalize_newline": False  # Разрешаем переносы строк
+                    "seed": -1  # Случайность
                 }
             }
             
@@ -159,7 +158,7 @@ class DeepSeekLLM(LLM):
         object.__setattr__(self, 'client', DeepSeekClient(base_url, model))
         object.__setattr__(self, '_kwargs', kwargs)
     
-    def _clean_response(self, content: str) -> str:
+    def _clean_response(self, content: str, remove_think_tags: bool = False) -> str:
         """Очищает ответ от служебных тегов DeepSeek"""
         import re
         
@@ -168,7 +167,12 @@ class DeepSeekLLM(LLM):
         content = re.sub(r'<｜end▁of▁sentence｜>', '', content)
         content = re.sub(r'<｜.*?｜>', '', content)  # Удаляем любые другие служебные токены
         
-        # Очищаем от лишних пробелов и переносов в начале
+        # Удаляем теги <think> только если это требуется (для объяснений релевантности)
+        if remove_think_tags:
+            content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL)
+        
+        # Очищаем от лишних пробелов и переносов
+        content = re.sub(r'\n\s*\n', '\n\n', content)  # Убираем множественные переносы
         content = content.strip()
         
         return content

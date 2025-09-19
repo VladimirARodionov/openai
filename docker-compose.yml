@@ -81,6 +81,12 @@ services:
       - COUCHBASE_HOST=couchbase
       - COUCHBASE_ADMINISTRATOR_USERNAME=${COUCHBASE_ADMINISTRATOR_USERNAME:-admin}
       - COUCHBASE_ADMINISTRATOR_PASSWORD=${COUCHBASE_ADMINISTRATOR_PASSWORD:-password}
+      # History settings
+      - USE_HISTORY_IN_QUERIES=${USE_HISTORY_IN_QUERIES:-false}
+      # Semantic chunking settings
+      - USE_SEMANTIC_CHUNKING=${USE_SEMANTIC_CHUNKING:-true}
+      - USE_METADATA_EXTRACTION=${USE_METADATA_EXTRACTION:-true}
+      - SEMANTIC_CHUNKING_DOC_LIMIT=${SEMANTIC_CHUNKING_DOC_LIMIT:-50}
     volumes:
       - ./logs:/app/logs
       - ./load:/app/load

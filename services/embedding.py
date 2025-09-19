@@ -4,10 +4,12 @@ import time
 from datetime import timedelta, datetime
 from pathlib import Path
 from multiprocessing import Process, Event
+from typing import Dict, Any
 
 import openai
 import tiktoken
 from services.deepseek_client import DeepSeekLLM, DeepSeekEmbedding
+from services.semantic_search import SemanticSearchEngine
 from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
@@ -15,7 +17,9 @@ from aiogram.enums import ParseMode
 from llama_cloud import MessageRole
 from llama_index.core import Settings, StorageContext, SimpleDirectoryReader, VectorStoreIndex, PromptTemplate, Document, SummaryIndex
 from llama_index.core.base.llms.types import ChatMessage
-from llama_index.core.node_parser import SimpleNodeParser
+from llama_index.core.node_parser import SimpleNodeParser, SentenceSplitter, SemanticSplitterNodeParser
+from llama_index.core.extractors import TitleExtractor
+from llama_index.core.ingestion import IngestionPipeline
 from llama_index.core.query_engine import CitationQueryEngine
 from llama_index.core.response_synthesizers import ResponseMode
 from llama_index.embeddings.openai import OpenAIEmbedding
@@ -336,20 +340,112 @@ class EmbeddingsSearch:
             logger.error(f"Error initializing vector store: {str(e)}")
             raise
         
-        # Инициализация storage context
+        # Инициализация storage context и семантического поиска
         if self.vector_store is not None:
             self.storage_context = StorageContext.from_defaults(
                 vector_store=self.vector_store
             )
+            
+            # Создаем индекс для семантического поиска
+            try:
+                self.index = VectorStoreIndex.from_vector_store(
+                    vector_store=self.vector_store,
+                    storage_context=self.storage_context
+                )
+                
+                # Инициализируем продвинутый семантический поиск
+                self.semantic_search = SemanticSearchEngine(
+                    vector_index=self.index,
+                    llm=Settings.llm,
+                    embed_model=Settings.embed_model
+                )
+                logger.info("Semantic search engine initialized")
+            except Exception as e:
+                logger.error(f"Ошибка инициализации семантического поиска: {e}")
+                self.semantic_search = None
         else:
             self.storage_context = None
+            self.semantic_search = None
             logger.warning("Storage context не создан - векторный поиск недоступен")
         self.node_parser = SimpleNodeParser.from_defaults()
 
         self.loading_process = None
         self.stop_loading = Event()
 
-        self.use_history = env_config.get('USE_HISTORY_IN_QUERIES', False)
+        self.use_history = env_config.get('USE_HISTORY_IN_QUERIES', 'false').lower() == 'true'
+        self.use_semantic_chunking = env_config.get('USE_SEMANTIC_CHUNKING', 'true').lower() == 'true'
+        self.use_metadata_extraction = env_config.get('USE_METADATA_EXTRACTION', 'true').lower() == 'true'
+        
+        logger.info(f"История в запросах: {'включена' if self.use_history else 'отключена'}")
+        logger.info(f"Семантический чанкинг: {'включен' if self.use_semantic_chunking else 'отключен'}")
+        logger.info(f"Извлечение метаданных: {'включено' if self.use_metadata_extraction else 'отключено'}")
+
+    def create_enhanced_pipeline(self, chunk_size: int = None, document_count: int = 0) -> IngestionPipeline:
+        """
+        Создает улучшенный пайплайн обработки документов с семантическим чанкингом
+        
+        Args:
+            chunk_size: Размер чанка (если None, используется адаптивный семантический)
+            document_count: Количество документов для обработки
+            
+        Returns:
+            IngestionPipeline: Настроенный пайплайн
+        """
+        transformations = []
+        
+        # Используем семантический чанкинг только для небольшого количества документов
+        doc_limit = int(env_config.get('SEMANTIC_CHUNKING_DOC_LIMIT', 50))
+        use_semantic_for_batch = self.use_semantic_chunking and document_count <= doc_limit
+        
+        if use_semantic_for_batch and chunk_size is None:
+            try:
+                # Семантический сплиттер с оптимизированными настройками для больших документов
+                semantic_splitter = SemanticSplitterNodeParser(
+                    buffer_size=2,  # Увеличиваем буфер для уменьшения количества запросов
+                    breakpoint_percentile_threshold=85,  # Менее агрессивное разбиение (85% вместо 95%)
+                    embed_model=Settings.embed_model,
+                    # Дополнительные оптимизации
+                    include_metadata=False,  # Отключаем метаданные для ускорения
+                    include_prev_next_rel=False  # Отключаем связи для ускорения
+                )
+                transformations.append(semantic_splitter)
+                logger.info("✅ Используется оптимизированный семантический чанкинг")
+            except Exception as e:
+                logger.warning(f"⚠️ Ошибка семантического чанкинга, используем обычный: {str(e)}")
+                # Fallback к обычному сплиттеру
+                use_deepseek = env_config.get('USE_DEEPSEEK', 'true').lower() == 'true'
+                chunk_size = 1024 if use_deepseek else 3072
+        
+        if not transformations:  # Если семантический не сработал или отключен
+            # Обычный сплиттер с оптимизированными параметрами
+            use_deepseek = env_config.get('USE_DEEPSEEK', 'true').lower() == 'true'
+            chunk_size = chunk_size or (1024 if use_deepseek else 3072)
+            sentence_splitter = SentenceSplitter(
+                chunk_size=chunk_size,
+                chunk_overlap=int(chunk_size * 0.1),  # 10% перекрытия
+                paragraph_separator="\n\n",
+                secondary_chunking_regex="[^,.;。]+[,.;。]?"
+            )
+            transformations.append(sentence_splitter)
+            logger.info(f"✅ Используется обычный чанкинг с размером {chunk_size}")
+        
+        # Добавляем экстракторы метаданных
+        if self.use_metadata_extraction:
+            try:
+                title_extractor = TitleExtractor(
+                    nodes=3,  # Анализируем первые 3 ноды для заголовка
+                    llm=Settings.llm
+                )
+                transformations.append(title_extractor)
+                logger.info("✅ Добавлен экстрактор заголовков")
+            except Exception as e:
+                logger.warning(f"⚠️ Не удалось добавить экстрактор заголовков: {str(e)}")
+        
+        # Добавляем эмбеддинг модель
+        transformations.append(Settings.embed_model)
+        
+        pipeline = IngestionPipeline(transformations=transformations)
+        return pipeline
 
     def num_tokens(self, text):
         """Подсчет токенов в тексте"""
@@ -495,18 +591,45 @@ class EmbeddingsSearch:
                             "type": "vector"
                         })
 
-                # Создаем индекс из документов целиком
-                logger.info("Создаем индекс из документов целиком")
+                # Создаем улучшенный пайплайн
+                doc_count = len(documents)
+                logger.info(f"🔧 Создаем улучшенный пайплайн обработки для {doc_count} документов...")
+                pipeline = self.create_enhanced_pipeline(document_count=doc_count)
+                
+                # Создаем индекс из документов с улучшенным пайплайном
+                doc_limit = int(env_config.get('SEMANTIC_CHUNKING_DOC_LIMIT', 50))
+                use_semantic_for_batch = self.use_semantic_chunking and doc_count <= doc_limit
+                if use_semantic_for_batch:
+                    processing_method = "семантическим (оптимизированным)"
+                elif self.use_semantic_chunking:
+                    processing_method = "стандартным (много документов, семантический отключен)"
+                else:
+                    processing_method = "стандартным"
+                logger.info(f"📚 Создаем индекс с {processing_method} чанкингом")
+                
                 index = VectorStoreIndex.from_documents(
                     documents,
                     storage_context=storage_context or self.storage_context,
+                    transformations=pipeline.transformations,  # Используем наш улучшенный пайплайн
                     show_progress=True
                 )
 
                 file_count = len(documents)
                 logger.info(f"Обработано файлов: {file_count}")
                 
-                return i18n.format_value('loading_files_count', {'count': file_count})
+                if use_semantic_for_batch:
+                    chunking_method = "семантический (оптимизированный)"
+                elif self.use_semantic_chunking:
+                    chunking_method = "стандартный (автоматически выбран для большого объема)"
+                else:
+                    chunking_method = "стандартный"
+                metadata_status = "включено" if self.use_metadata_extraction else "отключено"
+                
+                return (
+                    i18n.format_value('loading_files_count', {'count': file_count}) + '\n' +
+                    f"🧠 Метод чанкинга: {chunking_method}\n" +
+                    f"📊 Извлечение метаданных: {metadata_status}"
+                )
             else:
                 return i18n.format_value('loading_no_files')
             
@@ -515,6 +638,84 @@ class EmbeddingsSearch:
             raise
         finally:
             openai.OpenAI._disable_logging = False
+
+    def semantic_ask(self, query: str, user_id: int, context: str = "", use_clustering: bool = True) -> Dict[str, Any]:
+        """
+        Продвинутый семантический поиск с кластеризацией и объяснениями
+        """
+        try:
+            if not self.semantic_search:
+                logger.warning("Семантический поиск недоступен, используем обычный поиск")
+                return {"error": "Семантический поиск недоступен"}
+            
+            # История пользователя для контекста (только если включено в настройках)
+            if self.use_history and not context:
+                history = get_history(user_id)
+                if history:
+                    # Берем последние 3 сообщения как контекст
+                    recent_history = history[:3]  # Уже отсортированы по убыванию даты
+                    context = " ".join([f"Q: {h.search_text} A: {h.answer_text[:100]}..." for h in recent_history])
+                    logger.info(f"Используем историю для контекста: {len(recent_history)} записей")
+            
+            # Выполняем семантический поиск
+            search_results = self.semantic_search.search_with_context(
+                query=query,
+                context=context,
+                top_k=10
+            )
+            
+            # Генерируем ответ на основе кластеризованных результатов
+            if use_clustering and len(search_results["clusters"]) > 1:
+                # Формируем контекст из разных кластеров
+                cluster_contexts = []
+                for cluster_name, cluster_data in search_results["clusters"].items():
+                    cluster_text = f"\n--- Тема: {cluster_name} ---\n"
+                    for node in cluster_data["nodes"][:3]:  # Топ-3 из каждого кластера
+                        cluster_text += f"{node.node.text}\n\n"
+                    cluster_contexts.append(cluster_text)
+                
+                context_text = "\n".join(cluster_contexts)
+            else:
+                # Обычный контекст из топ результатов
+                context_text = "\n\n".join([node.node.text for node in search_results["top_results"][:5]])
+            
+            # Генерируем ответ
+            semantic_prompt = f"""
+            На основе предоставленной информации ответь на вопрос пользователя.
+            
+            Контекст из документов:
+            {context_text}
+            
+            Вопрос: {query}
+            
+            Дай развернутый ответ, используя информацию из контекста. Если информации недостаточно, так и скажи.
+            """
+            
+            response = Settings.llm.complete(semantic_prompt)
+            
+            # Добавляем объяснения релевантности для топ-3 результатов
+            explanations = []
+            for i, node in enumerate(search_results["top_results"][:3]):
+                explanation = self.semantic_search.explain_relevance(query, node)
+                explanations.append(f"Источник {i+1}: {explanation}")
+            
+            result = {
+                "response": str(response),
+                "clusters": search_results["clusters"],
+                "total_results": search_results["total_results"],
+                "explanations": explanations,
+                "search_type": "semantic_clustered" if use_clustering else "semantic_simple"
+            }
+            
+            # Сохраняем в историю
+            add_history(user_id, query, str(response), False, "semantic_search")
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Ошибка семантического поиска: {e}")
+            # Fallback к обычному поиску
+            return {"error": f"Ошибка семантического поиска: {str(e)}"}
 
     def ask(self, query, user_id, print_message=False):
         """Ответ на вопрос с использованием GPT и релевантных текстов"""

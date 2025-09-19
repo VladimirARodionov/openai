@@ -1,6 +1,7 @@
 import logging
 import asyncio
 import html
+from typing import Dict, Any
 
 from aiogram import Router, F
 from aiogram.filters import CommandStart, Command, StateFilter
@@ -195,6 +196,48 @@ async def chat_with_gpt_again(message, state: FSMContext):
     await state.set_state(FSMSelectResponseFormat.select_response_format)
     await message.reply(i18n.format_value("response_format_text"), reply_markup=get_inline_kb())
 
+async def print_semantic_results(result: Dict[str, Any], callback_query: CallbackQuery):
+    """Красивое отображение результатов семантического поиска"""
+    try:
+        # Основной ответ
+        response_text = result["response"]
+        
+        # Обрабатываем теги <think> для корректного отображения в Telegram
+        import re
+        response_text = re.sub(r'<think>', '🤔 **Размышления:**\n', response_text)
+        response_text = re.sub(r'</think>', '\n\n💡 **Ответ:**', response_text)
+        
+        # Отправляем основной ответ
+        await print_parts(response_text, callback_query)
+        
+        # Информация о поиске
+        search_info = f"""
+📊 **Информация о поиске:**
+🔍 Найдено результатов: {result['total_results']}
+🎯 Тип поиска: {result['search_type']}
+"""
+        
+        # Информация о кластерах (если есть)
+        if "clusters" in result and len(result["clusters"]) > 1:
+            search_info += f"📂 Найдено тематических групп: {len(result['clusters'])}\n\n"
+            
+            for cluster_name, cluster_data in result["clusters"].items():
+                search_info += f"**{cluster_name}:** {cluster_data['count']} документов (релевантность: {cluster_data['avg_score']:.2f})\n"
+        
+        await callback_query.message.answer(search_info)
+        
+        # Объяснения релевантности (если есть)
+        if "explanations" in result and result["explanations"]:
+            explanations_text = "🧠 **Объяснение релевантности:**\n\n"
+            for explanation in result["explanations"]:
+                explanations_text += f"• {explanation}\n\n"
+            
+            await callback_query.message.answer(explanations_text)
+            
+    except Exception as e:
+        logger.error(f"Ошибка отображения семантических результатов: {e}")
+        await callback_query.message.answer("❌ Ошибка отображения результатов")
+
 async def print_parts(response:str, callback_query: CallbackQuery):
     # Обрабатываем теги <think> для корректного отображения в Telegram
     import re
@@ -221,7 +264,7 @@ async def print_parts(response:str, callback_query: CallbackQuery):
                 await asyncio.sleep(0.5)  # Небольшая задержка между сообщениями
 
 
-@router.callback_query(lambda c: c.data in ["simple_response", "detailed_report"])
+@router.callback_query(lambda c: c.data in ["simple_response", "detailed_report", "semantic_search", "semantic_cluster"])
 async def process_callback(callback_query: CallbackQuery, state: FSMContext):
     try:
         # Сначала отвечаем на callback, чтобы убрать "часики"
@@ -248,6 +291,20 @@ async def process_callback(callback_query: CallbackQuery, state: FSMContext):
             elif user_choice == "detailed_report":
                 response = searcher.report(msg, callback_query.from_user.id, True)
                 await print_parts(response, callback_query)
+            elif user_choice == "semantic_search":
+                # Семантический поиск без кластеризации
+                result = searcher.semantic_ask(msg, callback_query.from_user.id, use_clustering=False)
+                if "error" in result:
+                    await callback_query.message.answer(f"❌ {result['error']}")
+                else:
+                    await print_semantic_results(result, callback_query)
+            elif user_choice == "semantic_cluster":
+                # Семантический поиск с кластеризацией
+                result = searcher.semantic_ask(msg, callback_query.from_user.id, use_clustering=True)
+                if "error" in result:
+                    await callback_query.message.answer(f"❌ {result['error']}")
+                else:
+                    await print_semantic_results(result, callback_query)
             
             # Удаляем сообщение о подготовке ответа
             await processing_msg.delete()
